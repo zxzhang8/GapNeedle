@@ -1,0 +1,20 @@
+[project]
+name = "gapfillet"
+version = "0.1.0"
+description = "Gap filling and stitching helper around minimap2 (mappy) with Jupyter-friendly UX."
+authors = [{ name = "GapFillet Authors" }]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "mappy>=2.24",
+]
+
+[project.scripts]
+gapfillet = "gapfillet.cli:main"
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
