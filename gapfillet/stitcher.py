@@ -16,7 +16,11 @@ TELOMERE_MOTIF = "CCCTAA"
 TELOMERE_WINDOW = 1000
 TELOMERE_MIN_REPEATS = 15
 HIGHLIGHT = "\x1b[1;33m"
+OK_COLOR = "\x1b[1;32m"
 RESET = "\x1b[0m"
+MD_OK = '<span style="color:green;font-weight:bold">'
+MD_WARN = '<span style="color:orange;font-weight:bold">'
+MD_RESET = "</span>"
 
 
 @dataclass
@@ -127,6 +131,48 @@ def _junction_preview(
     if hl == 0:
         return f"{l_tail}|{r_head}"
     return f"{l_head_plain}{color}{l_hl}|{r_hl}{RESET}{r_rest}"
+
+
+def _highlight_diff(a: str, b: str, color: str = HIGHLIGHT, reset: str = RESET) -> Tuple[str, str]:
+    """Return two strings with differing positions wrapped in color."""
+    res_a: List[str] = []
+    res_b: List[str] = []
+    for x, y in zip(a, b):
+        if x == y:
+            res_a.append(x)
+            res_b.append(y)
+        else:
+            res_a.append(f"{color}{x}{reset}")
+            res_b.append(f"{color}{y}{reset}")
+    return "".join(res_a), "".join(res_b)
+
+
+def _md_wrap(text: str, color: str) -> str:
+    return f'<span style="color:{color};font-weight:bold">{text}</span>'
+
+
+def _highlight_diff_md(a: str, b: str) -> Tuple[str, str]:
+    """Markdown-friendly diff highlight (orange)."""
+    return _highlight_diff(a, b, color=MD_WARN, reset=MD_RESET)
+
+
+def _junction_preview_md(left: str, right: str, context: int, highlight_len: int = 10) -> str:
+    """
+    Markdown preview with colored junction.
+    区域一致则绿色，否 orange。
+    """
+    ctx = max(0, context)
+    l_tail = left[-ctx:]
+    r_head = right[:ctx]
+    hl = min(highlight_len, len(l_tail), len(r_head))
+    if hl == 0:
+        return f"{l_tail}|{r_head}"
+    l_head_plain = l_tail[: len(l_tail) - hl]
+    l_hl = l_tail[len(l_tail) - hl :]
+    r_hl = r_head[:hl]
+    r_rest = r_head[hl:]
+    color = "green" if l_hl == r_hl else "orange"
+    return f"{l_head_plain}{_md_wrap(l_hl, color)}|{_md_wrap(r_hl, color)}{r_rest}"
 
 
 def _find_runs(subseq: str, motif: str) -> List[Tuple[int, int, List[Tuple[int, int]]]]:
@@ -258,8 +304,7 @@ def manual_stitch_by_coordinates(
     say: MessageFn = print,
     context: int = 200,
     stop_token: str = "x",
-    output_fasta: Optional[Path] = None,
-    output_name: Optional[str] = None,
+    reverse_query: bool = False,
 ) -> str:
     """
     Interactively stitch segments from two sequences by coordinates.
@@ -269,14 +314,19 @@ def manual_stitch_by_coordinates(
       then right breakpoint (before/after end). 对于第 2 段起，先展示左断点，再在加入后展示右断点。
     - After each addition, compares previous segment tail vs current head to hint consistency.
     - Stops when user inputs stop_token (default 'x') as the source.
-    - At the end, prints all junction contexts with a colored '|' marker and saves to FASTA if output_fasta is set.
-    - Returns the merged sequence string.
+    - At the end, prints all junction contexts with a colored '|' marker, then asks for FASTA path/name to save.
+    - reverse_query=True 将查询序列反向互补后再用于拼接（坐标按反向后的序列计算）。
+    - Returns the merged sequence string (regardless of saving).
     """
     t_records = read_fasta_sequences(target_fasta, select_names={target_seq})
     q_records = read_fasta_sequences(query_fasta, select_names={query_seq})
     if target_seq not in t_records or query_seq not in q_records:
         raise ValueError("FASTA中找不到目标序列或查询序列。")
-    seq_map = {"t": (target_seq, t_records[target_seq]), "q": (query_seq, q_records[query_seq])}
+    q_seq = q_records[query_seq]
+    if reverse_query:
+        q_seq = reverse_complement(q_seq)
+        say("已使用查询序列的反向互补进行手动拼接。")
+    seq_map = {"t": (target_seq, t_records[target_seq]), "q": (query_seq, q_seq)}
     stop_token = stop_token.lower()
     if stop_token in seq_map:
         raise ValueError(f"stop_token '{stop_token}' 不能与来源键重复，请使用其他字符。")
@@ -285,7 +335,7 @@ def manual_stitch_by_coordinates(
         f"手动拼接模式：输入来源(t/q) 与坐标 start-end（0-based，end 不含），"
         f"输入 {stop_token} 退出。"
     )
-    pieces: List[Tuple[str, int, int, str]] = []
+    pieces: List[Tuple[str, int, int, str, str, str, str, str]] = []
     merged_parts: List[str] = []
     while True:
         src = input(f"选择来源 [t={target_seq}/q={query_seq}/{stop_token}=退出]: ").strip().lower()
@@ -322,18 +372,54 @@ def manual_stitch_by_coordinates(
         )
 
         if pieces:
-            prev_seg = pieces[-1][3]
-            curr_seg = seg
-            compare_len = min(50, len(prev_seg), len(curr_seg))
-            prev_tail = prev_seg[-compare_len:] if compare_len else ""
-            curr_head = curr_seg[:compare_len] if compare_len else ""
-            same = prev_tail == curr_head and compare_len > 0
-            say(
-                f"与上一段拼接检查（末{compare_len}bp vs 首{compare_len}bp）: "
-                f"{'一致' if same else '不一致'}"
-            )
+            # Compare breakpoint contexts: left vs left, right vs right.
+            prev_left = pieces[-1][6]  # 上一段断点左侧（末端前 context）
+            prev_right = pieces[-1][7]  # 上一段断点右侧（末端后 context）
+            curr_left = left_before  # 当前段断点左侧
+            curr_right = left_after  # 当前段断点右侧
 
-        pieces.append((src, start, end, seg))
+            say("与上一段断点一致性检查:")
+
+            left_len = min(50, len(prev_left), len(curr_left))
+            if left_len:
+                prev_left_slice = prev_left[-left_len:]
+                curr_left_slice = curr_left[-left_len:]
+                if prev_left_slice == curr_left_slice:
+                    say(f"左侧一致（末{left_len}bp）: {OK_COLOR}{prev_left_slice}{RESET}")
+                else:
+                    hi_prev, hi_curr = _highlight_diff(prev_left_slice, curr_left_slice)
+                    say(f"左侧不一致（末{left_len}bp，高亮为差异位点）:")
+                    say(f"上一段左: {hi_prev}")
+                    say(f"当前段左: {hi_curr}")
+            else:
+                say("左侧无可比对的上下文。")
+
+            right_len = min(50, len(prev_right), len(curr_right))
+            if right_len:
+                prev_right_slice = prev_right[:right_len]
+                curr_right_slice = curr_right[:right_len]
+                if prev_right_slice == curr_right_slice:
+                    say(f"右侧一致（首{right_len}bp）: {OK_COLOR}{prev_right_slice}{RESET}")
+                else:
+                    hi_prev, hi_curr = _highlight_diff(prev_right_slice, curr_right_slice)
+                    say(f"右侧不一致（首{right_len}bp，高亮为差异位点）:")
+                    say(f"上一段右: {hi_prev}")
+                    say(f"当前段右: {hi_curr}")
+            else:
+                say("右侧无可比对的上下文。")
+
+        pieces.append(
+            (
+                src,
+                start,
+                end,
+                seg,
+                left_before,
+                left_after,
+                right_before,
+                right_after,
+            )
+        )
         merged_parts.append(seg)
 
         say(
@@ -346,18 +432,107 @@ def manual_stitch_by_coordinates(
     if len(pieces) >= 2:
         say(f"断点汇总（上下文 {context}bp，竖线为断点，左右高亮）:")
         for i in range(len(pieces) - 1):
-            l_src, l_start, l_end, l_seg = pieces[i]
-            r_src, r_start, r_end, r_seg = pieces[i + 1]
-            preview = _junction_preview(l_seg, r_seg, context)
+            l_src, l_start, l_end, l_seg, _, _, l_right_before, _ = pieces[i]
+            r_src, r_start, r_end, r_seg, r_left_before, r_left_after, _, _ = pieces[i + 1]
+            preview = _junction_preview(l_right_before, r_left_after, context)
             say(
                 f"[{i}] {l_src}:{l_start}-{l_end} -> {r_src}:{r_start}-{r_end}\n"
                 f"{preview}"
             )
 
-    if output_fasta is not None:
-        out_name = output_name or f"{target_seq}+{query_seq}"
-        write_fasta(output_fasta, {out_name: merged_seq})
-        say(f"拼接结果已保存到 {output_fasta} ，序列名 {out_name}")
+    save_ans = input("是否保存为 FASTA? [y/N]: ").strip().lower()
+    if save_ans in {"y", "yes"}:
+        while True:
+            out_path_raw = input("输出文件路径: ").strip()
+            if out_path_raw:
+                out_path = Path(out_path_raw)
+                break
+            say("路径不能为空。")
+        default_name = f"{target_seq}+{query_seq}"
+        seq_name = input(f"输出序列名 (默认 {default_name}): ").strip() or default_name
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_fasta({seq_name: merged_seq}, out_path)
+        log_path = out_path.with_suffix(".md")
+        log_lines = [
+            "# 手动拼接记录",
+            "",
+            f"- 目标 FASTA: {target_fasta}",
+            f"- 查询 FASTA: {query_fasta}",
+            f"- 目标序列: {target_seq}",
+            f"- 查询序列: {query_seq}",
+            f"- 输出 FASTA: {out_path}",
+            f"- 输出序列名: {seq_name}",
+            f"- 段数: {len(pieces)}",
+            f"- 合并长度: {len(merged_seq):,} bp",
+            "",
+            "## 选取的片段",
+        ]
+        for idx, (src, start, end, seg, _, _, _, _) in enumerate(pieces):
+            src_label = "目标" if src == "t" else "查询"
+            log_lines.append(f"- [{idx}] {src_label}({src}) {start}-{end} 长度 {len(seg):,} bp")
+        if len(pieces) >= 2:
+            log_lines.append("")
+            log_lines.append(f"## 断点上下文（各取 {context}bp）")
+            for i in range(len(pieces) - 1):
+                (
+                    l_src,
+                    l_start,
+                    l_end,
+                    _,
+                    _,
+                    _,
+                    l_right_before,
+                    l_right_after,
+                ) = pieces[i]
+                (
+                    r_src,
+                    r_start,
+                    r_end,
+                    _,
+                    r_left_before,
+                    r_left_after,
+                    _,
+                    _,
+                ) = pieces[i + 1]
+
+                preview = _junction_preview_md(l_right_before, r_left_after, context)
+                log_lines.append(f"- [{i}] {l_src}:{l_start}-{l_end} -> {r_src}:{r_start}-{r_end}")
+                log_lines.append(f"  - 断点上下文: {preview}")
+
+                left_len = min(50, len(l_right_before), len(r_left_before))
+                if left_len:
+                    prev_slice = l_right_before[-left_len:]
+                    curr_slice = r_left_before[-left_len:]
+                    if prev_slice == curr_slice:
+                        log_lines.append(
+                            f"  - 左侧一致（末{left_len}bp）: {_md_wrap(prev_slice, 'green')}"
+                        )
+                    else:
+                        hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
+                        log_lines.append(f"  - 左侧不一致（末{left_len}bp，高亮为差异位点）:")
+                        log_lines.append(f"    上一段左: {hi_prev}")
+                        log_lines.append(f"    当前段左: {hi_curr}")
+                else:
+                    log_lines.append("  - 左侧无可比对的上下文。")
+
+                right_len = min(50, len(l_right_after), len(r_left_after))
+                if right_len:
+                    prev_slice = l_right_after[:right_len]
+                    curr_slice = r_left_after[:right_len]
+                    if prev_slice == curr_slice:
+                        log_lines.append(
+                            f"  - 右侧一致（首{right_len}bp）: {_md_wrap(prev_slice, 'green')}"
+                        )
+                    else:
+                        hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
+                        log_lines.append(f"  - 右侧不一致（首{right_len}bp，高亮为差异位点）:")
+                        log_lines.append(f"    上一段右: {hi_prev}")
+                        log_lines.append(f"    当前段右: {hi_curr}")
+                else:
+                    log_lines.append("  - 右侧无可比对的上下文。")
+        log_path.write_text("\n".join(log_lines))
+        say(f"拼接结果已保存到 {out_path} ，序列名 {seq_name}")
+        say(f"操作记录已保存到 {log_path}")
 
     return merged_seq
 
@@ -552,12 +727,37 @@ class GapFillet:
     def __init__(self, say: MessageFn = print):
         self.say = say
 
+    def _print_paf_records(self, paf_path: Path) -> None:
+        """Print all alignment records from a PAF file."""
+        if not Path(paf_path).exists():
+            self.say(f"PAF 文件不存在，无法打印比对记录: {paf_path}")
+            return
+        lines = Path(paf_path).read_text().splitlines()
+        if not lines:
+            self.say("PAF 为空，暂无比对记录。")
+            return
+        self.say("比对记录：")
+        for idx, line in enumerate(lines):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 12:
+                self.say(f"[{idx}] {line}")
+                continue
+            qname, qlen, qstart, qend, strand, tname, tlen, tstart, tend, matches, aln_len, mapq, *_ = parts
+            arrow = "->" if strand == "+" else "<-"
+            desc = (
+                f"[{idx}]\t{qname}({int(qlen):,}bp)\t{int(qstart):,} - {int(qend):,}\t{arrow}\t"
+                f"{tname}({int(tlen):,}bp)\t{int(tstart):,} - {int(tend):,}\t"
+                f"matches={int(matches):,}/{int(aln_len):,} mapq={mapq}"
+            )
+            self.say(desc)
+
     def align(
         self,
         target_fasta: Path,
         query_fasta: Path,
         target_seq: str,
         query_seq: str,
+        reverse_query: bool = False,
         **kwargs,
     ) -> AlignmentRun:
         self.say("调用 minimap2 生成 PAF ...")
@@ -566,12 +766,16 @@ class GapFillet:
             query_fasta=query_fasta,
             target_seq=target_seq,
             query_seq=query_seq,
+            reverse_query=reverse_query,
             **kwargs,
         )
         if run.skipped:
             self.say(f"检测到已存在的 PAF，跳过运行: {run.output_path}")
         else:
             self.say(f"PAF 已生成: {run.output_path}")
+            if reverse_query:
+                self.say("注意：本次比对使用了查询序列的反向互补。")
+        self._print_paf_records(run.output_path)
         return run
 
     def stitch(
@@ -585,6 +789,7 @@ class GapFillet:
         auto_align: bool = True,
         run: Optional[AlignmentRun] = None,
         preset: Optional[str] = None,
+        reverse_query: bool = False,
         **kwargs,
     ) -> Path:
         """
@@ -603,7 +808,7 @@ class GapFillet:
         preset = preset or getattr(run, "preset", "asm10")
         paf_path = paf_path or getattr(run, "output_path", None) or kwargs.pop("output_path", None)
         if paf_path is None:
-            paf_path = default_paf_path(target_seq, query_seq, preset)
+            paf_path = default_paf_path(target_seq, query_seq, preset, reverse_query=reverse_query)
 
         if not Path(paf_path).exists():
             if not auto_align:
@@ -616,6 +821,7 @@ class GapFillet:
                 target_seq=target_seq,
                 query_seq=query_seq,
                 preset=preset,
+                reverse_query=reverse_query,
             )
 
         return stitch_from_paf(

@@ -12,7 +12,7 @@ except ImportError as exc:
         "Install with `pip install mappy` or build from minimap2 source."
     ) from exc
 
-from .io import read_fasta_sequences, write_fasta
+from .io import read_fasta_sequences, reverse_complement, write_fasta
 
 
 class Minimap2Error(RuntimeError):
@@ -32,11 +32,18 @@ class AlignmentRun:
 
 
 def default_paf_path(
-    target_seq: str, query_seq: str, preset: str, output_dir: Optional[Path] = None
+    target_seq: str,
+    query_seq: str,
+    preset: str,
+    output_dir: Optional[Path] = None,
+    *,
+    reverse_query: bool = False,
 ) -> Path:
     """Infer default PAF path; preset-specific files avoid clobbering."""
     safe_target = target_seq.replace(" ", "_")
     safe_query = query_seq.replace(" ", "_")
+    if reverse_query:
+        safe_query += "_rc"
     safe_preset = preset.replace(" ", "_") if preset else "default"
     dirname = f"{safe_query}_vs_{safe_target}"
     folder = Path.cwd() / dirname if output_dir is None else Path(output_dir)
@@ -70,6 +77,7 @@ def run_minimap2_alignment(
     reuse_existing: bool = True,
     filter_sequences: bool = True,
     dry_run: bool = False,
+    reverse_query: bool = False,
 ) -> AlignmentRun:
     """
     Run minimap2 (via mappy) to align `query_seq` onto `target_seq` and save a PAF file.
@@ -85,9 +93,10 @@ def run_minimap2_alignment(
     - When reuse_existing is True and the PAF already exists, the command is skipped.
     - Only the requested sequences are materialized (filter_sequences=True) to avoid
       full-assembly runtime. Disable if you want the original FASTA untouched.
+    - reverse_query=True 将查询序列在比对前取反向互补。
     """
     output_path = (
-        default_paf_path(target_seq, query_seq, preset, output_path)
+        default_paf_path(target_seq, query_seq, preset, output_path, reverse_query=reverse_query)
         if output_path is None or Path(output_path).is_dir()
         else Path(output_path)
     )
@@ -124,6 +133,8 @@ def run_minimap2_alignment(
         if query_seq not in query_records:
             raise ValueError(f"Sequence '{query_seq}' not found in {query_fasta}")
         qry_seq = query_records[query_seq]
+        if reverse_query:
+            qry_seq = reverse_complement(qry_seq)
         q_len = len(qry_seq)
 
         cmd: List[str] = [f"mappy.Aligner({tgt_fa}, preset={preset}, n_threads={threads})"]

@@ -3,23 +3,24 @@ from pathlib import Path
 from gapfillet import GapFillet, manual_stitch_by_coordinates
 from gapfillet.stitcher import telomere_details
 
-if __name__ == '__main__':
-
+if __name__ == "__main__":
     gf = GapFillet()
     tgt = Path("/home/zxzhang/remote/mouse/ICR/ICR.ont.p_ctg.fa")
     qry = Path("/home/zxzhang/remote/mouse/ICR/ICR.all.p_ctg.fa")
-    tgt_seq = "ptg000015l"
-    qry_seq = "ptg000001l"
+    tgt_seq = "ptg000008l"
+    qry_seq = "ptg000021l"
+    reverse_query = False
 
     # run = gf.align(
-    #     target_fasta=Path("/home/zxzhang/remote/mouse/ICR/ICR.ont.p_ctg.fa"),
-    #     query_fasta=Path("/home/zxzhang/remote/mouse/ICR/ICR.all.p_ctg.fa"),
-    #     target_seq="ptg000015l",
-    #     query_seq="ptg000001l",
-    #     threads=16,
-    #     preset="asm5"
+    #    target_fasta=tgt,
+    #    query_fasta=qry,
+    #    target_seq=tgt_seq,
+    #    query_seq=qry_seq,
+    #    threads=16,
+    #    preset="asm20",
+    #     reverse_query=reverse_query,
     # )
-    #
+
     # merged = gf.stitch(run=run)
 
     # left, right = telomere_details(
@@ -35,5 +36,5 @@ if __name__ == '__main__':
         qry,
         tgt_seq,
         qry_seq,
+        reverse_query=reverse_query,
     )
-
