@@ -11,15 +11,15 @@ if __name__ == "__main__":
     qry_seq = "ptg000021l"
     reverse_query = False
 
-    # run = gf.align(
-    #    target_fasta=tgt,
-    #    query_fasta=qry,
-    #    target_seq=tgt_seq,
-    #    query_seq=qry_seq,
-    #    threads=16,
-    #    preset="asm20",
-    #     reverse_query=reverse_query,
-    # )
+    run = gf.align(
+       target_fasta=tgt,
+       query_fasta=qry,
+       target_seq=tgt_seq,
+       query_seq=qry_seq,
+       threads=16,
+       preset="asm20",
+        reverse_query=reverse_query,
+    )
 
     # merged = gf.stitch(run=run)
 

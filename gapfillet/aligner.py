@@ -46,7 +46,8 @@ def default_paf_path(
         safe_query += "_rc"
     safe_preset = preset.replace(" ", "_") if preset else "default"
     dirname = f"{safe_query}_vs_{safe_target}"
-    folder = Path.cwd() / dirname if output_dir is None else Path(output_dir)
+    # folder = Path.cwd() / "resources" / dirname if output_dir is None else Path(output_dir)
+    folder = Path("D:/projects/GapFillet/resources/KM") / dirname if output_dir is None else Path(output_dir)
     filename = f"{dirname}.{safe_preset}.paf"
     return folder / filename
 

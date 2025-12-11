@@ -111,6 +111,20 @@ GapFillet
      # 按提示输入 t/q 与 start-end，依次打印断点左右两侧序列（先左断点，确认后给出右断点），结束后汇总显示各断点，再输入保存文件路径和序列名；输入 stop_token(默认 x，不能与 t/q 重复) 结束。保存时会同时写出同前缀的 .md 日志，记录每段的来源和坐标。
      ```
 
+图形界面（GUI）
+---------------
+- 双标签页：`对齐`（选择 FASTA，分页搜索序列名，设置线程/preset/反向互补后启动 mappy）与 `手动拼接`（继承上一页选择，输入坐标即时预览断点一致性并导出）。
+- 设计：暗色卡片 + 荧光绿强调，日志滚动面板实时输出；长序列列表支持搜索与翻页，避免一次性加载过多行。
+- 启动：
+  ```bash
+  # 需要额外安装 PyQt5 与 PyQt-Fluent-Widgets（未写入核心依赖）
+  pip install PyQt5 PyQt-Fluent-Widgets
+
+  python -m gapfillet.gui.app            # 或 Python 中：
+  # from gapfillet.gui import launch; launch()
+  ```
+- 字体/尺寸自定义：修改 `gapfillet/gui/theme.py` 中的 FONT_CANDIDATES、BASE_FONT_SIZE、WIDGET_FONT_SIZE 等即可统一调整字体和按钮大小。
+
 Jupyter 友好
 ------------
 - 所有高层 API 接受 `say` 回调，自定义消息输出（默认 `print`）。

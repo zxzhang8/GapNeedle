@@ -17,6 +17,7 @@ from .stitcher import (
     stitch_from_paf,
     telomere_presence,
 )
+from .gui import launch
 from .io import read_fasta_sequences, write_fasta
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "manual_stitch_by_coordinates",
     "read_fasta_sequences",
     "write_fasta",
+    "launch",
 ]
