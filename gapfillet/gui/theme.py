@@ -52,3 +52,6 @@ NAV_ICON_SIZE = int(32 * UI_SCALING)
 # Default working directory for file dialogs (None means OS default)
 DEFAULT_BROWSE_DIR = "/home/zxzhang/remote/mouse/KM"  # set to "/path/to/data" if you want dialogs to start there
 ALIGN_OUTPUT_DIR = "D:/projects/GapFillet/resources"
+
+# MANUAL STITCH UI
+INFO_HEIGHT = 500

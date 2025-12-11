@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+import html
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -51,7 +52,7 @@ from gapfillet.gui.theme import (
     UI_SCALING,
     WIDGET_FONT_SIZE,
     WINDOW_HEIGHT,
-    WINDOW_WIDTH,
+    WINDOW_WIDTH, INFO_HEIGHT,
 )
 from gapfillet.gui.alignment_viewer import AlignmentViewer
 from gapfillet.gui.igv_viewer import PafIgvViewer
@@ -254,7 +255,29 @@ def _diff_inline(a: str, b: str) -> tuple[str, str]:
     return "".join(res_a), "".join(res_b)
 
 
+def _diff_html_colored(a: str, b: str) -> tuple[str, str]:
+    """
+    HTML-highlight differences: matches green, mismatches red; preserves alignment.
+    """
+    res_a: List[str] = []
+    res_b: List[str] = []
+    for x, y in zip(a, b):
+        xe = html.escape(x)
+        ye = html.escape(y)
+        if x == y:
+            res_a.append(f'<span style="color:green;">{xe}</span>')
+            res_b.append(f'<span style="color:green;">{ye}</span>')
+        else:
+            res_a.append(f'<span style="color:red;">{xe}</span>')
+            res_b.append(f'<span style="color:red;">{ye}</span>')
+    return "".join(res_a), "".join(res_b)
+
+
 def _md_wrap(text: str, color: str) -> str:
+    return f'<span style="color:{color};font-weight:bold">{text}</span>'
+
+
+def _html_wrap(text: str, color: str) -> str:
     return f'<span style="color:{color};font-weight:bold">{text}</span>'
 
 
@@ -269,6 +292,20 @@ def _highlight_diff_md(a: str, b: str) -> tuple[str, str]:
         else:
             res_a.append(_md_wrap(x, "orange"))
             res_b.append(_md_wrap(y, "orange"))
+    return "".join(res_a), "".join(res_b)
+
+
+def _highlight_diff_html(a: str, b: str) -> tuple[str, str]:
+    """HTML-friendly diff highlight."""
+    res_a: List[str] = []
+    res_b: List[str] = []
+    for x, y in zip(a, b):
+        if x == y:
+            res_a.append(x)
+            res_b.append(y)
+        else:
+            res_a.append(_html_wrap(x, "orange"))
+            res_b.append(_html_wrap(y, "orange"))
     return "".join(res_a), "".join(res_b)
 
 
@@ -289,6 +326,24 @@ def _junction_preview_md(left: str, right: str, context: int, highlight_len: int
     r_rest = r_head[hl:]
     color = "green" if l_hl == r_hl else "orange"
     return f"{l_head_plain}{_md_wrap(l_hl, color)}|{_md_wrap(r_hl, color)}{r_rest}"
+
+
+def _junction_preview_html(left: str, right: str, context: int, highlight_len: int = 10) -> str:
+    """
+    HTML preview with colored junction.
+    """
+    ctx = max(0, context)
+    l_tail = left[-ctx:]
+    r_head = right[:ctx]
+    hl = min(highlight_len, len(l_tail), len(r_head))
+    if hl == 0:
+        return f"{l_tail}|{r_head}"
+    l_head_plain = l_tail[: len(l_tail) - hl]
+    l_hl = l_tail[len(l_tail) - hl :]
+    r_hl = r_head[:hl]
+    r_rest = r_head[hl:]
+    color = "green" if l_hl == r_hl else "orange"
+    return f"{l_head_plain}{_html_wrap(l_hl, color)}|{_html_wrap(r_hl, color)}{r_rest}"
 
 
 # -----------------------------
@@ -756,7 +811,7 @@ class ManualStitchPage(QtWidgets.QWidget):
         detail_split = QtWidgets.QHBoxLayout()
         self.preview = QtWidgets.QTextEdit(self)
         self.preview.setReadOnly(True)
-        self.preview.setMinimumHeight(180)
+        self.preview.setMinimumHeight(INFO_HEIGHT)
         font = QtGui.QFont()
         font.setPointSize(WIDGET_FONT_SIZE)
         self.preview.setFont(font)
@@ -772,9 +827,18 @@ class ManualStitchPage(QtWidgets.QWidget):
         layout.addLayout(detail_split)
 
         footer = QtWidgets.QHBoxLayout()
+        check_btn = PushButton("Check breakpoints", self, icon=FluentIcon.CHECKBOX)
+        check_btn.clicked.connect(self._check_breakpoints)
+        footer.addWidget(check_btn)
         export_btn = PrimaryPushButton("Export merged FASTA", self, icon=FluentIcon.SAVE)
         export_btn.clicked.connect(self._export)
         footer.addWidget(export_btn)
+        move_up = PushButton("Move up", self, icon=FluentIcon.LEFT_ARROW)
+        move_up.clicked.connect(lambda: self._move_segment(-1))
+        move_down = PushButton("Move down", self, icon=FluentIcon.ARROW_DOWN)
+        move_down.clicked.connect(lambda: self._move_segment(1))
+        footer.addWidget(move_up)
+        footer.addWidget(move_down)
         remove_btn = PushButton("Remove selected", self, icon=FluentIcon.DELETE)
         remove_btn.clicked.connect(self._remove_selected)
         footer.addWidget(remove_btn)
@@ -919,10 +983,17 @@ class ManualStitchPage(QtWidgets.QWidget):
             "context": ctx,
         }
         self.selected_names[src_key] = seq_name
-        self.segments.append(segment)
+        insert_at = self.segment_list.currentRow()
+        if insert_at < 0 or insert_at >= len(self.segments):
+            self.segments.append(segment)
+            insert_at = len(self.segments) - 1
+        else:
+            self.segments.insert(insert_at + 1, segment)
+            insert_at = insert_at + 1
         self.start_edit.clear()
         self.end_edit.clear()
         self._refresh_segments()
+        self.segment_list.setCurrentRow(insert_at)
 
     def _materialize_segment(
         self, seg: Dict[str, object], ctx: int, handles: Dict[Path, object]
@@ -950,32 +1021,23 @@ class ManualStitchPage(QtWidgets.QWidget):
         seq_len = entry.length
         reverse = self.reverse_check.isChecked() and src == "q"
         if reverse:
-            # translate coordinates to original orientation
-            seq_start = seq_len - end
-            seq_end = seq_len - start
-            seq = reverse_complement(
-                _read_range_from_fasta(path, entry, seq_start, seq_end, handle=fh)
-            )
-            left_before = reverse_complement(
-                _read_range_from_fasta(
-                    path, entry, seq_end, min(seq_len, seq_end + ctx), handle=fh
+            # Interpret start/end on the reverse-complemented sequence.
+            def rc_slice(a: int, b: int) -> str:
+                a = max(0, a)
+                b = min(seq_len, b)
+                if a >= b:
+                    return ""
+                orig_start = seq_len - b
+                orig_end = seq_len - a
+                return reverse_complement(
+                    _read_range_from_fasta(path, entry, orig_start, orig_end, handle=fh)
                 )
-            )
-            left_after = reverse_complement(
-                _read_range_from_fasta(
-                    path, entry, max(0, seq_start - ctx), seq_start, handle=fh
-                )
-            )
-            right_before = reverse_complement(
-                _read_range_from_fasta(
-                    path, entry, max(0, seq_end - ctx), seq_end, handle=fh
-                )
-            )
-            right_after = reverse_complement(
-                _read_range_from_fasta(
-                    path, entry, seq_start, min(seq_len, seq_start + ctx), handle=fh
-                )
-            )
+
+            seq = rc_slice(start, end)
+            left_before = rc_slice(max(0, start - ctx), start)
+            left_after = rc_slice(start, min(seq_len, start + ctx))
+            right_before = rc_slice(max(0, end - ctx), end)
+            right_after = rc_slice(end, min(seq_len, end + ctx))
         else:
             seq = _read_range_from_fasta(path, entry, start, end, handle=fh)
             left_before = _read_range_from_fasta(path, entry, max(0, start - ctx), start, handle=fh)
@@ -1049,10 +1111,10 @@ class ManualStitchPage(QtWidgets.QWidget):
                 if left_slice == right_slice:
                     self.preview.append('<span style="color:green;">Left flanks match ✓</span>')
                 else:
-                    hi_prev, hi_curr = _diff_inline(left_slice, right_slice)
+                    hi_prev, hi_curr = _diff_html_colored(left_slice, right_slice)
                     self.preview.append(
-                        f'<span style="color:red;">Left flanks differ:</span>\n'
-                        f'{hi_prev}\n{hi_curr}'
+                        f'<span style="color:red;">Left flanks differ:</span><br>'
+                        f'{hi_prev}<br>{hi_curr}'
                     )
             r_a = left["right_after"][: min(50, len(left["right_after"]))]
             r_b = right["left_after"][: min(50, len(right["left_after"]))]
@@ -1060,10 +1122,10 @@ class ManualStitchPage(QtWidgets.QWidget):
                 if r_a == r_b:
                     self.preview.append('<span style="color:green;">Right flanks match ✓</span>\n')
                 else:
-                    hi_prev, hi_curr = _diff_inline(r_a, r_b)
+                    hi_prev, hi_curr = _diff_html_colored(r_a, r_b)
                     self.preview.append(
-                        f'<span style="color:red;">Right flanks differ:</span>\n'
-                        f'{hi_prev}\n{hi_curr}\n'
+                        f'<span style="color:red;">Right flanks differ:</span><br>'
+                        f'{hi_prev}<br>{hi_curr}<br>'
                     )
         self._on_segment_select()
 
@@ -1077,6 +1139,17 @@ class ManualStitchPage(QtWidgets.QWidget):
             return
         del self.segments[row]
         self._refresh_segments()
+
+    def _move_segment(self, delta: int) -> None:
+        row = self.segment_list.currentRow()
+        if row < 0 or row >= len(self.segments):
+            return
+        new_row = row + delta
+        if not (0 <= new_row < len(self.segments)):
+            return
+        self.segments[row], self.segments[new_row] = self.segments[new_row], self.segments[row]
+        self._refresh_segments()
+        self.segment_list.setCurrentRow(new_row)
 
     def _on_segment_select(self) -> None:
         row = self.segment_list.currentRow()
@@ -1110,36 +1183,9 @@ class ManualStitchPage(QtWidgets.QWidget):
             InfoBar.info("No segments", "Add at least one segment.", parent=self)
             return
         ctx = self.context_spin.value()
-        # Ensure indexes loaded for both sources that are used
-        used_sources = {seg["src"] for seg in self.segments}
-        for src in used_sources:
-            path = self._get_path_for_source(src)  # type: ignore[arg-type]
-            if path is None or not path.exists():
-                InfoBar.error(
-                    "Missing file",
-                    f"Set {'target' if src == 't' else 'query'} FASTA path before exporting.",
-                    parent=self,
-                )
-                return
-        for src in used_sources:
-            if not self.indexes.get(src):
-                self._load_index_for_source(src)
-                if not self.indexes.get(src):
-                    return
-        handles: Dict[Path, object] = {}
-        enriched: List[Dict[str, object]] = []
-        try:
-            for seg in self.segments:
-                enriched.append(self._materialize_segment(seg, ctx, handles))
-        except Exception as exc:  # pragma: no cover
-            InfoBar.error("Export failed", str(exc), parent=self)
+        enriched = self._materialize_all(ctx)
+        if enriched is None:
             return
-        finally:
-            for fh in handles.values():
-                try:
-                    fh.close()
-                except Exception:
-                    pass
 
         merged = "".join(seg["seq"] for seg in enriched)
         target_name = self.selected_names.get("t") or self._first_name_from_segments("t") or "target"
@@ -1162,43 +1208,179 @@ class ManualStitchPage(QtWidgets.QWidget):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         write_fasta({suggested_name: merged}, out_path)
 
-        # Also write a markdown log (aligns with CLI workflow).
         log_path = out_path.with_suffix(".md")
-        log_lines = [
-            "# 手动拼接记录",
-            "",
-            f"- 目标 FASTA: {self.target_path.text() or 'N/A'}",
-            f"- 查询 FASTA: {self.query_path.text() or 'N/A'}",
-            f"- 目标序列: {target_name}",
-            f"- 查询序列: {query_name}",
-            f"- reverse_query: {self.reverse_check.isChecked()}",
-            f"- 输出 FASTA: {out_path}",
-            f"- 输出序列名: {suggested_name}",
-            f"- 段数: {len(enriched)}",
-            f"- 合并长度: {len(merged):,} bp",
-            "",
-            "## 选取的片段",
-        ]
+        log_lines = self._build_log_lines(
+            enriched=enriched,
+            merged_len=len(merged),
+            out_path=out_path,
+            suggested_name=suggested_name,
+            target_name=target_name,
+            query_name=query_name,
+            ctx=ctx,
+            as_html=False,
+        )
+        log_path.write_text("\n".join(log_lines))
+
+        # Persist enriched sequences for preview after export without re-reading.
+        self.segments = enriched
+        self._refresh_segments()
+
+        InfoBar.success("Saved", f"Wrote {out_path} + log", parent=self)
+
+    def _check_breakpoints(self) -> None:
+        if not self.segments:
+            InfoBar.info("No segments", "Add at least one segment.", parent=self)
+            return
+        ctx = self.context_spin.value()
+        enriched = self._materialize_all(ctx)
+        if enriched is None:
+            return
+        # Use enriched data in the UI preview just like post-export.
+        self.segments = enriched
+        self._refresh_segments()
+        InfoBar.success("Checked", "Breakpoint context ready (no files written).", parent=self)
+
+    def _materialize_all(self, ctx: int) -> Optional[List[Dict[str, object]]]:
+        used_sources = {seg["src"] for seg in self.segments}
+        for src in used_sources:
+            path = self._get_path_for_source(src)  # type: ignore[arg-type]
+            if path is None or not path.exists():
+                InfoBar.error(
+                    "Missing file",
+                    f"Set {'target' if src == 't' else 'query'} FASTA path before continuing.",
+                    parent=self,
+                )
+                return None
+        for src in used_sources:
+            if not self.indexes.get(src):
+                self._load_index_for_source(src)
+                if not self.indexes.get(src):
+                    return None
+        handles: Dict[Path, object] = {}
+        enriched: List[Dict[str, object]] = []
+        try:
+            for seg in self.segments:
+                enriched.append(self._materialize_segment(seg, ctx, handles))
+        except Exception as exc:  # pragma: no cover
+            InfoBar.error("Operation failed", str(exc), parent=self)
+            return None
+        finally:
+            for fh in handles.values():
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+        return enriched
+
+    def _build_log_lines(
+        self,
+        enriched: List[Dict[str, object]],
+        merged_len: int,
+        out_path: Path,
+        suggested_name: str,
+        target_name: str,
+        query_name: str,
+        ctx: int,
+        as_html: bool = False,
+    ) -> List[str]:
+        wrap = _html_wrap if as_html else _md_wrap
+        diff_fn = _highlight_diff_html if as_html else _highlight_diff_md
+        junction_fn = _junction_preview_html if as_html else _junction_preview_md
+
+        if as_html:
+            header = [
+                "# Manual stitch log",
+                "",
+                f"- Target FASTA: {html.escape(self.target_path.text() or 'N/A')}",
+                f"- Query FASTA: {html.escape(self.query_path.text() or 'N/A')}",
+                f"- Target sequence: {html.escape(target_name)}",
+                f"- Query sequence: {html.escape(query_name)}",
+                f"- reverse_query: {self.reverse_check.isChecked()}",
+                f"- Output FASTA: {html.escape(str(out_path)) if out_path != Path('N/A') else 'N/A'}",
+                f"- Output name: {html.escape(suggested_name)}",
+                f"- Segments: {len(enriched)}",
+                f"- Merged length: {merged_len:,} bp",
+                "",
+                "## Segments",
+            ]
+            seg_line_tpl = "- [{idx}] {src_label}({src}) {name} {start}-{end} length {length:,} bp"
+            junction_title = f"## Breakpoint contexts (each {ctx}bp)"
+            preview_label = "  - Junction preview: {preview}"
+            prior_right_label = "  - Prior right flank ({src}:{name} {s}-{e}): {seq}"
+            next_left_label = "  - Next left flank ({src}:{name} {s}-{e}): {seq}"
+            next_left_pre_label = "  - Next left pre-flank ({src}:{name} {s}-{e}): {seq}"
+            left_match_label = "  - Left flanks match (last {len}bp): {seq}"
+            left_diff_label = "  - Left flanks differ (last {len}bp, diff highlighted):"
+            prior_right_diff_label = "    Prior right flank ({src}:{name} {s}-{e}): {seq}"
+            next_left_diff_label = "    Next left pre-flank ({src}:{name} {s}-{e}): {seq}"
+            no_left_label = "  - No comparable left context."
+            right_match_label = "  - Right flanks match (first {len}bp): {seq}"
+            right_diff_label = "  - Right flanks differ (first {len}bp, diff highlighted):"
+            prior_right_r_label = "    Prior right flank ({src}:{name} {s}-{e}): {seq}"
+            next_left_r_label = "    Next left flank ({src}:{name} {s}-{e}): {seq}"
+            no_right_label = "  - No comparable right context."
+            seg_label = lambda src: "Target" if src == "t" else "Query"
+        else:
+            header = [
+                "# 手动拼接记录",
+                "",
+                f"- 目标 FASTA: {self.target_path.text() or 'N/A'}",
+                f"- 查询 FASTA: {self.query_path.text() or 'N/A'}",
+                f"- 目标序列: {target_name}",
+                f"- 查询序列: {query_name}",
+                f"- reverse_query: {self.reverse_check.isChecked()}",
+                f"- 输出 FASTA: {out_path}",
+                f"- 输出序列名: {suggested_name}",
+                f"- 段数: {len(enriched)}",
+                f"- 合并长度: {merged_len:,} bp",
+                "",
+                "## 选取的片段",
+            ]
+            seg_line_tpl = "- [{idx}] {src_label}({src}) {name} {start}-{end} 长度 {length:,} bp"
+            junction_title = f"## 断点上下文（各取 {ctx}bp）"
+            preview_label = "  - 断点上下文: {preview}"
+            prior_right_label = "  - 前段右侧 ({src}:{name} {s}-{e}): {seq}"
+            next_left_label = "  - 后段左侧 ({src}:{name} {s}-{e}): {seq}"
+            next_left_pre_label = "  - 后段左侧前序 ({src}:{name} {s}-{e}): {seq}"
+            left_match_label = "  - 左侧一致（末{len}bp）: {seq}"
+            left_diff_label = "  - 左侧不一致（末{len}bp，高亮为差异位点）:"
+            prior_right_diff_label = "    前段右侧 ({src}:{name} {s}-{e}): {seq}"
+            next_left_diff_label = "    后段左侧前序 ({src}:{name} {s}-{e}): {seq}"
+            no_left_label = "  - 左侧无可比对的上下文。"
+            right_match_label = "  - 右侧一致（首{len}bp）: {seq}"
+            right_diff_label = "  - 右侧不一致（首{len}bp，高亮为差异位点）:"
+            prior_right_r_label = "    前段右侧 ({src}:{name} {s}-{e}): {seq}"
+            next_left_r_label = "    后段左侧 ({src}:{name} {s}-{e}): {seq}"
+            no_right_label = "  - 右侧无可比对的上下文。"
+            seg_label = lambda src: "目标" if src == "t" else "查询"
+
+        log_lines = list(header)
         for idx, seg in enumerate(enriched):
-            src_label = "目标" if seg["src"] == "t" else "查询"
             log_lines.append(
-                f"- [{idx}] {src_label}({seg['src']}) {seg['name']} {seg['start']}-{seg['end']} 长度 {len(seg['seq']):,} bp"
+                seg_line_tpl.format(
+                    idx=idx,
+                    src_label=seg_label(seg["src"]),
+                    src=seg["src"],
+                    name=seg["name"],
+                    start=seg["start"],
+                    end=seg["end"],
+                    length=len(seg["seq"]),
+                )
             )
 
         if len(enriched) >= 2:
             log_lines.append("")
-            log_lines.append(f"## 断点上下文（各取 {ctx}bp）")
+            log_lines.append(junction_title)
             for i in range(len(enriched) - 1):
                 left = enriched[i]
                 right = enriched[i + 1]
-                preview = _junction_preview_md(left["right_before"], right["left_after"], ctx)
+                preview = junction_fn(left["right_before"], right["left_after"], ctx)
                 log_lines.append(
                     f"- [{i}] {left['src']}:{left['name']} {left['start']}-{left['end']} -> "
                     f"{right['src']}:{right['name']} {right['start']}-{right['end']}"
                 )
-                log_lines.append(f"  - 断点上下文: {preview}")
+                log_lines.append(preview_label.format(preview=preview))
 
-                # clearly label which sequence/side each slice comes from
                 l_rb_len = len(left["right_before"])
                 r_la_len = len(right["left_after"])
                 r_lb_len = len(right["left_before"])
@@ -1207,16 +1389,22 @@ class ManualStitchPage(QtWidgets.QWidget):
                 r_ctx_start = right["start"]
                 r_ctx_end = right["start"] + r_la_len
                 log_lines.append(
-                    f"  - 前段右侧 ({left['src']}:{left['name']} {l_ctx_start}-{l_ctx_end}): {left['right_before']}"
+                    prior_right_label.format(
+                        src=left["src"], name=left["name"], s=l_ctx_start, e=l_ctx_end, seq=left["right_before"]
+                    )
                 )
                 log_lines.append(
-                    f"  - 后段左侧 ({right['src']}:{right['name']} {r_ctx_start}-{r_ctx_end}): {right['left_after']}"
+                    next_left_label.format(
+                        src=right["src"], name=right["name"], s=r_ctx_start, e=r_ctx_end, seq=right["left_after"]
+                    )
                 )
                 if r_lb_len:
                     rb_start = max(0, right["start"] - r_lb_len)
                     rb_end = right["start"]
                     log_lines.append(
-                        f"  - 后段左侧前序 ({right['src']}:{right['name']} {rb_start}-{rb_end}): {right['left_before']}"
+                        next_left_pre_label.format(
+                            src=right["src"], name=right["name"], s=rb_start, e=rb_end, seq=right["left_before"]
+                        )
                     )
 
                 left_len = min(50, len(left["right_before"]), len(right["left_before"]))
@@ -1227,21 +1415,25 @@ class ManualStitchPage(QtWidgets.QWidget):
                     rb_end = right["start"]
                     if prev_slice == curr_slice:
                         log_lines.append(
-                            f"  - 左侧一致（末{left_len}bp）: {_md_wrap(prev_slice, 'green')}"
+                            left_match_label.format(len=left_len, seq=wrap(prev_slice, "green"))
                         )
                     else:
-                        hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
+                        hi_prev, hi_curr = diff_fn(prev_slice, curr_slice)
                         log_lines.append(
-                            f"  - 左侧不一致（末{left_len}bp，高亮为差异位点）:"
+                            left_diff_label.format(len=left_len)
                         )
                         log_lines.append(
-                            f"    前段右侧 ({left['src']}:{left['name']} {l_ctx_start}-{l_ctx_end}): {hi_prev}"
+                            prior_right_diff_label.format(
+                                src=left["src"], name=left["name"], s=l_ctx_start, e=l_ctx_end, seq=hi_prev
+                            )
                         )
                         log_lines.append(
-                            f"    后段左侧前序 ({right['src']}:{right['name']} {rb_start}-{rb_end}): {hi_curr}"
+                            next_left_diff_label.format(
+                                src=right["src"], name=right["name"], s=rb_start, e=rb_end, seq=hi_curr
+                            )
                         )
                 else:
-                    log_lines.append("  - 左侧无可比对的上下文。")
+                    log_lines.append(no_left_label)
 
                 right_len = min(50, len(left["right_after"]), len(right["left_after"]))
                 if right_len:
@@ -1253,29 +1445,34 @@ class ManualStitchPage(QtWidgets.QWidget):
                     ra_end = right["start"] + len(right["left_after"])
                     if prev_slice == curr_slice:
                         log_lines.append(
-                            f"  - 右侧一致（首{right_len}bp）: {_md_wrap(prev_slice, 'green')}"
+                            right_match_label.format(len=right_len, seq=wrap(prev_slice, "green"))
                         )
                     else:
-                        hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
+                        hi_prev, hi_curr = diff_fn(prev_slice, curr_slice)
                         log_lines.append(
-                            f"  - 右侧不一致（首{right_len}bp，高亮为差异位点）:"
+                            right_diff_label.format(len=right_len)
                         )
                         log_lines.append(
-                            f"    前段右侧 ({left['src']}:{left['name']} {la_start}-{la_end}): {hi_prev}"
+                            prior_right_r_label.format(
+                                src=left["src"], name=left["name"], s=la_start, e=la_end, seq=hi_prev
+                            )
                         )
                         log_lines.append(
-                            f"    后段左侧 ({right['src']}:{right['name']} {ra_start}-{ra_end}): {hi_curr}"
+                            next_left_r_label.format(
+                                src=right["src"], name=right["name"], s=ra_start, e=ra_end, seq=hi_curr
+                            )
                         )
                 else:
-                    log_lines.append("  - 右侧无可比对的上下文。")
-
-        log_path.write_text("\n".join(log_lines))
-
-        # Persist enriched sequences for preview after export without re-reading.
-        self.segments = enriched
-        self._refresh_segments()
-
-        InfoBar.success("Saved", f"Wrote {out_path} + log", parent=self)
+                    log_lines.append(no_right_label)
+        if as_html:
+            safe_lines: List[str] = []
+            for line in log_lines:
+                if "<span" in line:
+                    safe_lines.append(line)
+                else:
+                    safe_lines.append(html.escape(line))
+            return safe_lines
+        return log_lines
 
 
 # -----------------------------
