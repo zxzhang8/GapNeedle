@@ -44,7 +44,7 @@ class AlignmentViewer(QtWidgets.QWidget):
         control.addWidget(self.mapq_spin, 0, 1)
         control.addWidget(QtWidgets.QLabel("Sort by"), 1, 0)
         self.sort_combo = ComboBox(self)
-        self.sort_combo.addItems(["qstart", "qend", "tstart", "tend"])
+        self.sort_combo.addItems(["qstart", "qend", "tstart", "tend", "matches"])
         control.addWidget(self.sort_combo, 1, 1)
         apply_btn = PrimaryPushButton("Apply", self)
         apply_btn.clicked.connect(self._apply_filter_sort)
@@ -108,8 +108,10 @@ class AlignmentViewer(QtWidgets.QWidget):
             "qend": lambda r: r.q_end,
             "tstart": lambda r: r.t_start,
             "tend": lambda r: r.t_end,
+            "matches": lambda r: r.matches,
         }.get(key, lambda r: r.q_start)
-        filtered.sort(key=key_fn)
+        reverse = key == "matches"
+        filtered.sort(key=key_fn, reverse=reverse)
 
         self.table.setRowCount(len(filtered))
         for row, rec in enumerate(filtered):

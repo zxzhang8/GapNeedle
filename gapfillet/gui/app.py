@@ -68,7 +68,7 @@ class AppState:
     query_fasta: Optional[Path] = None
     target_seq: Optional[str] = None
     query_seq: Optional[str] = None
-    preset: str = "asm10"
+    preset: str = "asm20"
     threads: int = 4
     reverse_query: bool = False
     last_alignment: Optional[AlignmentRun] = None
@@ -692,9 +692,6 @@ class ManualStitchPage(QtWidgets.QWidget):
         self.target_path = LineEdit(self)
         self.query_path = LineEdit(self)
         self.reverse_check = CheckBox("Reverse-complement query", self)
-        self.reverse_check.stateChanged.connect(
-            lambda _: setattr(self.state, "reverse_query", self.reverse_check.isChecked())
-        )
         self.context_spin = SpinBox(self)
         self.context_spin.setRange(20, 5000)
         self.context_spin.setValue(200)
@@ -841,10 +838,6 @@ class ManualStitchPage(QtWidgets.QWidget):
         try:
             idx = _load_fai_index(path, self.state)
             self.indexes[src] = idx
-            if src == "t":
-                self.state.target_fasta = path
-            else:
-                self.state.query_fasta = path
             if self._current_source_key() == src:
                 self._populate_seq_options()
             if info:
@@ -871,11 +864,6 @@ class ManualStitchPage(QtWidgets.QWidget):
             self.seq_len_label.setText(_format_bp(idx[name].length))
         else:
             self.seq_len_label.setText("")
-        if name:
-            if src == "t":
-                self.state.target_seq = name
-            else:
-                self.state.query_seq = name
 
     def _populate_seq_options(self) -> None:
         src = self._current_source_key()
@@ -1183,6 +1171,7 @@ class ManualStitchPage(QtWidgets.QWidget):
             f"- 查询 FASTA: {self.query_path.text() or 'N/A'}",
             f"- 目标序列: {target_name}",
             f"- 查询序列: {query_name}",
+            f"- reverse_query: {self.reverse_check.isChecked()}",
             f"- 输出 FASTA: {out_path}",
             f"- 输出序列名: {suggested_name}",
             f"- 段数: {len(enriched)}",
@@ -1209,19 +1198,48 @@ class ManualStitchPage(QtWidgets.QWidget):
                 )
                 log_lines.append(f"  - 断点上下文: {preview}")
 
+                # clearly label which sequence/side each slice comes from
+                l_rb_len = len(left["right_before"])
+                r_la_len = len(right["left_after"])
+                r_lb_len = len(right["left_before"])
+                l_ctx_start = max(0, left["end"] - l_rb_len)
+                l_ctx_end = left["end"]
+                r_ctx_start = right["start"]
+                r_ctx_end = right["start"] + r_la_len
+                log_lines.append(
+                    f"  - 前段右侧 ({left['src']}:{left['name']} {l_ctx_start}-{l_ctx_end}): {left['right_before']}"
+                )
+                log_lines.append(
+                    f"  - 后段左侧 ({right['src']}:{right['name']} {r_ctx_start}-{r_ctx_end}): {right['left_after']}"
+                )
+                if r_lb_len:
+                    rb_start = max(0, right["start"] - r_lb_len)
+                    rb_end = right["start"]
+                    log_lines.append(
+                        f"  - 后段左侧前序 ({right['src']}:{right['name']} {rb_start}-{rb_end}): {right['left_before']}"
+                    )
+
                 left_len = min(50, len(left["right_before"]), len(right["left_before"]))
                 if left_len:
                     prev_slice = left["right_before"][-left_len:]
                     curr_slice = right["left_before"][-left_len:]
+                    rb_start = max(0, right["start"] - len(right["left_before"]))
+                    rb_end = right["start"]
                     if prev_slice == curr_slice:
                         log_lines.append(
                             f"  - 左侧一致（末{left_len}bp）: {_md_wrap(prev_slice, 'green')}"
                         )
                     else:
                         hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
-                        log_lines.append(f"  - 左侧不一致（末{left_len}bp，高亮为差异位点）:")
-                        log_lines.append(f"    上一段左: {hi_prev}")
-                        log_lines.append(f"    当前段左: {hi_curr}")
+                        log_lines.append(
+                            f"  - 左侧不一致（末{left_len}bp，高亮为差异位点）:"
+                        )
+                        log_lines.append(
+                            f"    前段右侧 ({left['src']}:{left['name']} {l_ctx_start}-{l_ctx_end}): {hi_prev}"
+                        )
+                        log_lines.append(
+                            f"    后段左侧前序 ({right['src']}:{right['name']} {rb_start}-{rb_end}): {hi_curr}"
+                        )
                 else:
                     log_lines.append("  - 左侧无可比对的上下文。")
 
@@ -1229,15 +1247,25 @@ class ManualStitchPage(QtWidgets.QWidget):
                 if right_len:
                     prev_slice = left["right_after"][:right_len]
                     curr_slice = right["left_after"][:right_len]
+                    la_start = left["end"]
+                    la_end = left["end"] + len(left["right_after"])
+                    ra_start = right["start"]
+                    ra_end = right["start"] + len(right["left_after"])
                     if prev_slice == curr_slice:
                         log_lines.append(
                             f"  - 右侧一致（首{right_len}bp）: {_md_wrap(prev_slice, 'green')}"
                         )
                     else:
                         hi_prev, hi_curr = _highlight_diff_md(prev_slice, curr_slice)
-                        log_lines.append(f"  - 右侧不一致（首{right_len}bp，高亮为差异位点）:")
-                        log_lines.append(f"    上一段右: {hi_prev}")
-                        log_lines.append(f"    当前段右: {hi_curr}")
+                        log_lines.append(
+                            f"  - 右侧不一致（首{right_len}bp，高亮为差异位点）:"
+                        )
+                        log_lines.append(
+                            f"    前段右侧 ({left['src']}:{left['name']} {la_start}-{la_end}): {hi_prev}"
+                        )
+                        log_lines.append(
+                            f"    后段左侧 ({right['src']}:{right['name']} {ra_start}-{ra_end}): {hi_curr}"
+                        )
                 else:
                     log_lines.append("  - 右侧无可比对的上下文。")
 
