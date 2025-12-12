@@ -808,7 +808,9 @@ class GapFillet:
         preset = preset or getattr(run, "preset", "asm10")
         paf_path = paf_path or getattr(run, "output_path", None) or kwargs.pop("output_path", None)
         if paf_path is None:
-            paf_path = default_paf_path(target_seq, query_seq, preset, reverse_query=reverse_query)
+            paf_path = default_paf_path(
+                target_fasta, query_fasta, target_seq, query_seq, preset, reverse_query=reverse_query
+            )
 
         if not Path(paf_path).exists():
             if not auto_align:

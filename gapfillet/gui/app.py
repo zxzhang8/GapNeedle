@@ -1371,9 +1371,13 @@ class ManualStitchPage(QtWidgets.QWidget):
         if len(enriched) >= 2:
             log_lines.append("")
             log_lines.append(junction_title)
+            breakpoint_pos = []
+            offset = 0
             for i in range(len(enriched) - 1):
                 left = enriched[i]
                 right = enriched[i + 1]
+                offset += len(left["seq"])
+                breakpoint_pos.append((i, offset))
                 preview = junction_fn(left["right_before"], right["left_after"], ctx)
                 log_lines.append(
                     f"- [{i}] {left['src']}:{left['name']} {left['start']}-{left['end']} -> "
@@ -1464,6 +1468,14 @@ class ManualStitchPage(QtWidgets.QWidget):
                         )
                 else:
                     log_lines.append(no_right_label)
+            log_lines.append("")
+            bp_title = "## Breakpoint positions in merged sequence" if as_html else "## 断点在合并序列中的位置"
+            log_lines.append(bp_title)
+            for i, pos in breakpoint_pos:
+                line = f"- breakpoint [{i}] at {pos:,} (0-based, after segment {i})"
+                if not as_html:
+                    line = f"- 断点 [{i}] 在 {pos:,}（0基，位于第 {i} 段之后）"
+                log_lines.append(line)
         if as_html:
             safe_lines: List[str] = []
             for line in log_lines:

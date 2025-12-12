@@ -31,7 +31,13 @@ class AlignmentRun:
     skipped: bool
 
 
+def _safe_part(name: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
+
+
 def default_paf_path(
+    target_fasta: Path,
+    query_fasta: Path,
     target_seq: str,
     query_seq: str,
     preset: str,
@@ -39,15 +45,17 @@ def default_paf_path(
     *,
     reverse_query: bool = False,
 ) -> Path:
-    """Infer default PAF path; preset-specific files avoid clobbering."""
-    safe_target = target_seq.replace(" ", "_")
-    safe_query = query_seq.replace(" ", "_")
-    if reverse_query:
-        safe_query += "_rc"
-    safe_preset = preset.replace(" ", "_") if preset else "default"
-    dirname = f"{safe_query}_vs_{safe_target}"
-    # folder = Path.cwd() / "resources" / dirname if output_dir is None else Path(output_dir)
-    folder = Path("D:/projects/GapFillet/resources/KM") / dirname if output_dir is None else Path(output_dir)
+    """
+    Infer default PAF path. Use FASTA 文件名 + 序列名，避免不同文件同名序列冲突。
+    """
+    safe_target = _safe_part(target_seq)
+    safe_query = _safe_part(query_seq) + ("_rc" if reverse_query else "")
+    safe_preset = _safe_part(preset) if preset else "default"
+    tgt_file = _safe_part(Path(target_fasta).stem)
+    qry_file = _safe_part(Path(query_fasta).stem)
+    dirname = f"{qry_file}.{safe_query}_vs_{tgt_file}.{safe_target}"
+    base_dir = Path("D:/projects/GapFillet/resources/KM") if output_dir is None else Path(output_dir)
+    folder = base_dir / dirname
     filename = f"{dirname}.{safe_preset}.paf"
     return folder / filename
 
@@ -97,7 +105,9 @@ def run_minimap2_alignment(
     - reverse_query=True 将查询序列在比对前取反向互补。
     """
     output_path = (
-        default_paf_path(target_seq, query_seq, preset, output_path, reverse_query=reverse_query)
+        default_paf_path(
+            target_fasta, query_fasta, target_seq, query_seq, preset, output_path, reverse_query=reverse_query
+        )
         if output_path is None or Path(output_path).is_dir()
         else Path(output_path)
     )
