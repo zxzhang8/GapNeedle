@@ -193,16 +193,11 @@ def _build_fai(fasta_path: Path, fai_path: Path) -> None:
         seq_start = 0
         line_len = None
         line_blen = None
-        while True:
-            pos = fh.tell()
-            line = fh.readline()
-            if not line:
-                if seq_name:
-                    out.write(
-                        f"{seq_name}\t{seq_len}\t{seq_start}\t{line_len or 0}\t{line_blen or 0}\n"
-                    )
-                break
-            line = line.rstrip(b"\n")
+        pos = 0  # running file offset to avoid frequent tell() calls
+        for raw_line in fh:
+            raw_len = len(raw_line)
+            line = raw_line.rstrip(b"\r\n")
+            newline_len = raw_len - len(line)
             if line.startswith(b">"):
                 if seq_name is not None:
                     out.write(
@@ -210,15 +205,18 @@ def _build_fai(fasta_path: Path, fai_path: Path) -> None:
                     )
                 seq_name = line[1:].split(b" ", 1)[0].decode()
                 seq_len = 0
-                seq_start = fh.tell()
+                seq_start = pos + raw_len  # start of sequence after header line
                 line_len = None
                 line_blen = None
             else:
-                raw_len = len(line)
-                seq_len += raw_len
+                base_len = len(line)
+                seq_len += base_len
                 if line_len is None:
-                    line_len = raw_len
-                    line_blen = raw_len + 1  # assume single-byte newline
+                    line_len = base_len
+                    line_blen = base_len + (newline_len or 1)
+            pos += raw_len
+        if seq_name:
+            out.write(f"{seq_name}\t{seq_len}\t{seq_start}\t{line_len or 0}\t{line_blen or 0}\n")
 
 
 def _format_bp(value: int) -> str:
@@ -354,6 +352,7 @@ def _junction_preview_html(left: str, right: str, context: int, highlight_len: i
 class NameLoader(QtCore.QThread):
     namesReady = QtCore.pyqtSignal(list)
     failed = QtCore.pyqtSignal(str)
+    notice = QtCore.pyqtSignal(str)
 
     def __init__(self, path: Path, state: AppState, parent: Optional[QtCore.QObject] = None):
         super().__init__(parent)
@@ -362,6 +361,9 @@ class NameLoader(QtCore.QThread):
 
     def run(self) -> None:
         try:
+            fai_path = Path(str(self.path) + ".fai")
+            if not fai_path.exists():
+                self.notice.emit("No .fai index found; building one. This may take a moment for large FASTA files.")
             names = _list_fasta_names(self.path, self.state)
             self.namesReady.emit(names)
         except Exception as exc:  # pragma: no cover
@@ -512,6 +514,7 @@ class SequencePicker(QtWidgets.QWidget):
         self.loader = NameLoader(path, self.state)
         self.loader.namesReady.connect(self._on_names_ready)
         self.loader.failed.connect(self._on_names_failed)
+        self.loader.notice.connect(self._on_index_notice)
         self.loader.start()
 
     def _on_names_ready(self, names: List[str]) -> None:
@@ -525,6 +528,9 @@ class SequencePicker(QtWidgets.QWidget):
         self.refresh_btn.setEnabled(True)
         self.browse_btn.setEnabled(True)
         InfoBar.error("Failed to read", err, parent=self)
+
+    def _on_index_notice(self, msg: str) -> None:
+        InfoBar.info("Indexing", msg, duration=8000, parent=self)
 
     def _apply_filter(self, text: str = "", reset_page: bool = False) -> None:
         query = (text or self.search_edit.text()).strip().lower()
@@ -879,6 +885,13 @@ class ManualStitchPage(QtWidgets.QWidget):
             if info:
                 InfoBar.error("Missing file", f"Set {'target' if src == 't' else 'query'} FASTA first.", parent=self)
             return
+        if info and not Path(str(path) + ".fai").exists():
+            InfoBar.info(
+                "Indexing",
+                "No .fai index found; building one. This may take a moment.",
+                duration=8000,
+                parent=self,
+            )
         try:
             idx = _load_fai_index(path, self.state)
             self.indexes[src] = idx
