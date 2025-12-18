@@ -1,8 +1,8 @@
 [project]
-name = "gapfillet"
+name = "gapneedle"
 version = "0.1.0"
 description = "Gap filling and stitching helper around minimap2 (mappy) with Jupyter-friendly UX."
-authors = [{ name = "GapFillet Authors" }]
+authors = [{ name = "Zexin Zhang" }]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gapfillet = "gapfillet.cli:main"
+gapneedle = "gapneedle.cli:main"
 
 [build-system]
 requires = ["setuptools>=61", "wheel"]

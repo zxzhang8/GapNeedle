@@ -1,5 +1,5 @@
 """
-Minimal CLI wrapper so users can try GapFillet without writing code.
+Minimal CLI wrapper so users can try GapNeedle without writing code.
 """
 import argparse
 from pathlib import Path
@@ -8,7 +8,7 @@ from .stitcher import GapFillet
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="GapFillet: minimap2 + stitching helper")
+    parser = argparse.ArgumentParser(description="GapNeedle: minimap2 + stitching helper")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_align = sub.add_parser("align", help="运行 minimap2 生成 PAF")

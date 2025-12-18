@@ -1,4 +1,4 @@
-GapFillet
+GapNeedle
 =========
 
 一个面向基因组拼接 gap filling 的轻量 Python 库，封装了 minimap2 对单条序列的比对、PAF 解析和简易拼接逻辑，兼顾命令行和 Jupyter 使用体验。
@@ -6,6 +6,9 @@ GapFillet
 安装
 ----
 - 依赖：Python 3.9+，`mappy`（已安装）。
+- [mappy](https://github.com/lh3/minimap2) 安装
+
+  GapNeedle的比对依赖minimap2，mappy是minimap2的Python bindings to a sub set of C APIs。其可以通过 `pip install mappy` 或 `conda install -c bioconda mappy`安装。
 - 本地开发/临时使用：在项目根目录执行
   ```bash
   pip install -e .
@@ -34,12 +37,12 @@ GapFillet
    - 行为：调用 minimap2（mappy），默认只抽取指定单条序列；输出 `{query}_vs_{target}/{query}_vs_{target}.{preset}.paf`（preset 自动写入文件名），如果同名文件存在则直接跳过并提示。  
    - CLI 例子：
      ```bash
-     python -m gapfillet.cli align ref.fa qry.fa chr1 chr1 --threads 8 --preset asm10
+     python -m gapneedle.cli align ref.fa qry.fa chr1 chr1 --threads 8 --preset asm10
      # 若已有 chr1_vs_chr1/chr1_vs_chr1.asm10.paf 则跳过运行
      ```
    - Python / Jupyter 例子：
      ```python
-     from gapfillet import GapFillet
+     from gapneedle import GapFillet
      gf = GapFillet()
      run = gf.align(
          target_fasta="ref.fa",
@@ -58,9 +61,9 @@ GapFillet
    - CLI 例子：
      ```bash
      # 交互选择候选（默认 selection 留空即交互）
-     python -m gapfillet.cli stitch chr1_vs_chr1/chr1_vs_chr1.asm10.paf ref.fa qry.fa chr1 chr1
+     python -m gapneedle.cli stitch chr1_vs_chr1/chr1_vs_chr1.asm10.paf ref.fa qry.fa chr1 chr1
      # 或指定候选编号并输出到自定义路径
-     python -m gapfillet.cli stitch chr1_vs_chr1/chr1_vs_chr1.asm10.paf ref.fa qry.fa chr1 chr1 \
+     python -m gapneedle.cli stitch chr1_vs_chr1/chr1_vs_chr1.asm10.paf ref.fa qry.fa chr1 chr1 \
        --selection 0 --output chr1_merge.fa
      ```
    - Python / Jupyter 例子：
@@ -86,12 +89,12 @@ GapFillet
    - 作用：判断序列两端给定窗口内是否含连续端粒基序（默认 CCCTAA，自动考虑反向互补，至少连续15次才算命中）。  
    - Python：
      ```python
-     from gapfillet import telomere_presence
+     from gapneedle import telomere_presence
      left, right = telomere_presence("assembly.fa", "chr1", window=10_000_000, min_repeats=15)
-     # 或使用封装在 GapFillet 中的便捷方法
+     # 或使用封装在 GapNeedle 中的便捷方法
      gf.check_telomere("assembly.fa", "chr1", window=5_000_000, motif="CCCTAA", min_repeats=15)
      # 若需要细节（连续匹配位置/重复数/覆盖长度/变异碱基数），使用 telomere_details
-     from gapfillet.stitcher import telomere_details
+     from gapneedle.stitcher import telomere_details
      left_info, right_info = telomere_details("assembly.fa", "chr1", window=5_000_000, min_repeats=15)
      # info 示例: {'has': True, 'matches': [(0,6), ...], 'span_len': 120, 'mutated_bases': 0, 'repeat_count': 20}
      ```
@@ -100,7 +103,7 @@ GapFillet
    - 作用：在交互模式下按坐标逐段选取目标/查询序列并拼接，可打印两侧 ~200bp 序列并检查相邻段边界是否一致，结束后汇总显示每个断点两侧序列（带颜色高亮和断点符号），最后询问输出文件/序列名并保存，同时生成同前缀的日志文件（.md）记录所有片段坐标。  
    - Python：
      ```python
-     from gapfillet import manual_stitch_by_coordinates
+     from gapneedle import manual_stitch_by_coordinates
      merged = manual_stitch_by_coordinates(
          "target.fa",
          "query.fa",
@@ -120,8 +123,8 @@ GapFillet
   # 需要额外安装 PyQt5 与 PyQt-Fluent-Widgets（未写入核心依赖）
   pip install PyQt5 PyQt-Fluent-Widgets
 
-  python -m gapfillet.gui.app            # 或 Python 中：
-  # from gapfillet.gui import launch; launch()
+  python -m gapneedle.gui.app            # 或 Python 中：
+  # from gapneedle.gui import launch; launch()
   ```
 - 字体/尺寸自定义：修改 `gapfillet/gui/theme.py` 中的 FONT_CANDIDATES、BASE_FONT_SIZE、WIDGET_FONT_SIZE 等即可统一调整字体和按钮大小。
 

@@ -54,7 +54,11 @@ def default_paf_path(
     tgt_file = _safe_part(Path(target_fasta).stem)
     qry_file = _safe_part(Path(query_fasta).stem)
     dirname = f"{qry_file}.{safe_query}_vs_{tgt_file}.{safe_target}"
-    base_dir = Path("D:/projects/GapFillet/resources/KM") if output_dir is None else Path(output_dir)
+    if output_dir is None:
+        project_root = Path(__file__).resolve().parent.parent
+        base_dir = project_root / "resources"
+    else:
+        base_dir = Path(output_dir)
     folder = base_dir / dirname
     filename = f"{dirname}.{safe_preset}.paf"
     return folder / filename

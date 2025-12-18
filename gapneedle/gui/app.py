@@ -29,9 +29,9 @@ try:
 except ImportError:
     mp = None
 
-from gapfillet.aligner import AlignmentRun, run_minimap2_alignment
-from gapfillet.io import read_fasta_sequences, reverse_complement, write_fasta
-from gapfillet.gui.theme import (
+from gapneedle.aligner import AlignmentRun, run_minimap2_alignment
+from gapneedle.io import read_fasta_sequences, reverse_complement, write_fasta
+from gapneedle.gui.theme import (
     ACCENT_FONT_SIZE,
     BASE_FONT_SIZE,
     BUTTON_PADDING,
@@ -54,8 +54,7 @@ from gapfillet.gui.theme import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH, INFO_HEIGHT,
 )
-from gapfillet.gui.alignment_viewer import AlignmentViewer
-from gapfillet.gui.igv_viewer import PafIgvViewer
+from gapneedle.gui.alignment_viewer import AlignmentViewer
 from qfluentwidgets.components.navigation.navigation_widget import NavigationPushButton
 
 
@@ -683,7 +682,6 @@ class AlignPage(QtWidgets.QWidget):
         self.log.write(f"{status} · {run.output_path}")
         InfoBar.success("Alignment finished", f"{status}: {run.output_path}", parent=self)
         self._push_to_viewer(run)
-        self._push_to_igv_first(rec=None, run=run)
 
     def _push_to_viewer(self, run: AlignmentRun) -> None:
         main_window = self.window()
@@ -693,26 +691,6 @@ class AlignPage(QtWidgets.QWidget):
                 viewer.load_paf(run.output_path, run.target_seq, run.query_seq)
             except Exception:
                 pass
-
-    def _push_to_igv_first(self, rec=None, run: AlignmentRun | None = None) -> None:
-        """If IGV viewer exists, load first record from current PAF (useful when alignment skipped)."""
-        if rec:
-            self._open_in_igv(rec)
-            return
-        if run is None:
-            return
-        main_window = self.window()
-        viewer = getattr(main_window, "viewer_widget", None)
-        if not viewer:
-            return
-        try:
-            # viewer stores records; ensure it loads PAF then pick first record
-            viewer.load_paf(run.output_path, run.target_seq, run.query_seq)
-            if getattr(viewer, "_records", None):
-                first = viewer._records[0]
-                self._open_in_igv(first)
-        except Exception:
-            pass
 
 
 class ManualStitchPage(QtWidgets.QWidget):
@@ -746,7 +724,6 @@ class ManualStitchPage(QtWidgets.QWidget):
 
         self.target_path = LineEdit(self)
         self.query_path = LineEdit(self)
-        self.reverse_check = CheckBox("Reverse-complement query", self)
         self.context_spin = SpinBox(self)
         self.context_spin.setRange(20, 5000)
         self.context_spin.setValue(200)
@@ -767,7 +744,6 @@ class ManualStitchPage(QtWidgets.QWidget):
 
         form.addWidget(QtWidgets.QLabel("Breakpoint context (bp)"), 0, 3)
         form.addWidget(self.context_spin, 0, 4)
-        form.addWidget(self.reverse_check, 1, 3, 1, 2)
 
         refresh_idx = PrimaryPushButton("Load .fai", self, icon=FluentIcon.DOWNLOAD)
         refresh_idx.clicked.connect(lambda: (self._load_index_for_source("t"), self._load_index_for_source("q")))
@@ -798,6 +774,10 @@ class ManualStitchPage(QtWidgets.QWidget):
         self.end_edit.setPlaceholderText("end")
         segment_row.addWidget(self.start_edit)
         segment_row.addWidget(self.end_edit)
+        self.segment_reverse_check = CheckBox("Reverse-complement", self)
+        self.segment_reverse_check.setToolTip("Apply reverse-complement to this segment (query only).")
+        self.segment_reverse_check.setEnabled(False)
+        segment_row.addWidget(self.segment_reverse_check)
         add_btn = PrimaryPushButton("Add segment", self, icon=FluentIcon.ADD)
         add_btn.clicked.connect(self._add_segment)
         segment_row.addWidget(add_btn)
@@ -871,7 +851,6 @@ class ManualStitchPage(QtWidgets.QWidget):
             return
         self.target_path.setText(str(self.state.target_fasta))
         self.query_path.setText(str(self.state.query_fasta))
-        self.reverse_check.setChecked(self.state.reverse_query)
         if self.state.target_seq:
             self.selected_names["t"] = self.state.target_seq
         if self.state.query_seq:
@@ -918,6 +897,8 @@ class ManualStitchPage(QtWidgets.QWidget):
         return "t" if self.source_combo.currentIndex() == 0 else "q"
 
     def _on_source_change(self) -> None:
+        src = self._current_source_key()
+        self.segment_reverse_check.setEnabled(src == "q")
         self._populate_seq_options()
 
     def _on_seq_change(self, name: str) -> None:
@@ -981,6 +962,7 @@ class ManualStitchPage(QtWidgets.QWidget):
             "end": end,
             "length": seq_len,
             "context": ctx,
+            "reverse": bool(self.segment_reverse_check.isChecked()) if src_key == "q" else False,
         }
         self.selected_names[src_key] = seq_name
         insert_at = self.segment_list.currentRow()
@@ -1019,7 +1001,7 @@ class ManualStitchPage(QtWidgets.QWidget):
         start = int(seg["start"])
         end = int(seg["end"])
         seq_len = entry.length
-        reverse = self.reverse_check.isChecked() and src == "q"
+        reverse = bool(seg.get("reverse")) and src == "q"
         if reverse:
             # Interpret start/end on the reverse-complemented sequence.
             def rc_slice(a: int, b: int) -> str:
@@ -1066,14 +1048,20 @@ class ManualStitchPage(QtWidgets.QWidget):
                 return str(seg["name"])
         return None
 
+    def _format_segment_label(self, seg: Dict[str, object]) -> str:
+        name = seg.get("name", "?")
+        rc_flag = " (RC)" if seg.get("reverse") else ""
+        return f"{seg.get('src')}:{name}{rc_flag} {seg.get('start')}-{seg.get('end')}"
+
     def _refresh_segments(self) -> None:
         self.segment_list.clear()
         total = 0
         for idx, seg in enumerate(self.segments):
             span_len = seg["end"] - seg["start"]
             name = seg.get("name", "?")
+            rc_flag = " (RC)" if seg.get("reverse") else ""
             self.segment_list.addItem(
-                f"[{idx}] {seg['src']}:{name} {seg['start']}-{seg['end']} · {span_len:,}bp"
+                f"[{idx}] {seg['src']}:{name}{rc_flag} {seg['start']}-{seg['end']} · {span_len:,}bp"
             )
             total += span_len
         self.length_label.setText(f"{len(self.segments)} segments · {_format_bp(total)}")
@@ -1092,7 +1080,7 @@ class ManualStitchPage(QtWidgets.QWidget):
             lines = ["Sequence data will be read at export time. Current segments:"]
             for seg in self.segments:
                 lines.append(
-                    f"- {seg.get('src')}:{seg.get('name', '?')} {seg.get('start')}-{seg.get('end')}"
+                    f"- {self._format_segment_label(seg)}"
                 )
             self.preview.setText("\n".join(lines))
             return
@@ -1102,8 +1090,7 @@ class ManualStitchPage(QtWidgets.QWidget):
             ctx_val = left.get("context", self.context_spin.value())  # type: ignore[arg-type]
             preview = _junction_preview_plain(left["right_before"], right["left_after"], ctx_val)
             self.preview.append(
-                f"[{i}] {left['src']}:{left.get('name')} {left['start']}-{left['end']} -> "
-                f"{right['src']}:{right.get('name')} {right['start']}-{right['end']}\n{preview}"
+                f"[{i}] {self._format_segment_label(left)} -> {self._format_segment_label(right)}\n{preview}"
             )
             left_slice = left["right_before"][-min(50, len(left["right_before"])) :]
             right_slice = right["left_before"][-min(50, len(right["left_before"])) :]
@@ -1160,7 +1147,7 @@ class ManualStitchPage(QtWidgets.QWidget):
         ctx = seg.get("context", self.context_spin.value())  # type: ignore[arg-type]
         span_len = seg["end"] - seg["start"]
         lines: List[str] = [
-            f"Segment [{row}] {seg['src']}:{seg.get('name', '?')} {seg['start']}-{seg['end']} ({span_len:,} bp)"
+            f"Segment [{row}] {self._format_segment_label(seg)} ({span_len:,} bp)"
         ]
         if "seq" in seg:
             lines += [
@@ -1286,6 +1273,12 @@ class ManualStitchPage(QtWidgets.QWidget):
         wrap = _html_wrap if as_html else _md_wrap
         diff_fn = _highlight_diff_html if as_html else _highlight_diff_md
         junction_fn = _junction_preview_html if as_html else _junction_preview_md
+        seg_fmt = (
+            lambda seg: html.escape(self._format_segment_label(seg))
+            if as_html
+            else self._format_segment_label(seg)
+        )
+        rc_count = sum(1 for seg in enriched if seg.get("reverse"))
 
         if as_html:
             header = [
@@ -1295,7 +1288,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 f"- Query FASTA: {html.escape(self.query_path.text() or 'N/A')}",
                 f"- Target sequence: {html.escape(target_name)}",
                 f"- Query sequence: {html.escape(query_name)}",
-                f"- reverse_query: {self.reverse_check.isChecked()}",
+                f"- Reverse-complemented segments: {rc_count}",
                 f"- Output FASTA: {html.escape(str(out_path)) if out_path != Path('N/A') else 'N/A'}",
                 f"- Output name: {html.escape(suggested_name)}",
                 f"- Segments: {len(enriched)}",
@@ -1303,7 +1296,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 "",
                 "## Segments",
             ]
-            seg_line_tpl = "- [{idx}] {src_label}({src}) {name} {start}-{end} length {length:,} bp"
+            seg_line_tpl = "- [{idx}] {src_label}({src}) {name}{rev} {start}-{end} length {length:,} bp"
             junction_title = f"## Breakpoint contexts (each {ctx}bp)"
             preview_label = "  - Junction preview: {preview}"
             prior_right_label = "  - Prior right flank ({src}:{name} {s}-{e}): {seq}"
@@ -1328,7 +1321,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 f"- 查询 FASTA: {self.query_path.text() or 'N/A'}",
                 f"- 目标序列: {target_name}",
                 f"- 查询序列: {query_name}",
-                f"- reverse_query: {self.reverse_check.isChecked()}",
+                f"- 反向互补: {rc_count} 个片段勾选",
                 f"- 输出 FASTA: {out_path}",
                 f"- 输出序列名: {suggested_name}",
                 f"- 段数: {len(enriched)}",
@@ -1336,7 +1329,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 "",
                 "## 选取的片段",
             ]
-            seg_line_tpl = "- [{idx}] {src_label}({src}) {name} {start}-{end} 长度 {length:,} bp"
+            seg_line_tpl = "- [{idx}] {src_label}({src}) {name}{rev} {start}-{end} 长度 {length:,} bp"
             junction_title = f"## 断点上下文（各取 {ctx}bp）"
             preview_label = "  - 断点上下文: {preview}"
             prior_right_label = "  - 前段右侧 ({src}:{name} {s}-{e}): {seq}"
@@ -1361,7 +1354,8 @@ class ManualStitchPage(QtWidgets.QWidget):
                     idx=idx,
                     src_label=seg_label(seg["src"]),
                     src=seg["src"],
-                    name=seg["name"],
+                    name=html.escape(str(seg["name"])) if as_html else seg["name"],
+                    rev=" (RC)" if seg.get("reverse") else "",
                     start=seg["start"],
                     end=seg["end"],
                     length=len(seg["seq"]),
@@ -1380,8 +1374,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 breakpoint_pos.append((i, offset))
                 preview = junction_fn(left["right_before"], right["left_after"], ctx)
                 log_lines.append(
-                    f"- [{i}] {left['src']}:{left['name']} {left['start']}-{left['end']} -> "
-                    f"{right['src']}:{right['name']} {right['start']}-{right['end']}"
+                    f"- [{i}] {seg_fmt(left)} -> {seg_fmt(right)}"
                 )
                 log_lines.append(preview_label.format(preview=preview))
 
@@ -1497,7 +1490,7 @@ class GapFilletWindow(FluentWindow):
         super().__init__()
         base_font = apply_theme(self)
         self.state = AppState()
-        self.setWindowTitle("GapFillet · Fluent GUI")
+        self.setWindowTitle("GapNeedle · Fluent GUI")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         try:
             self.navigationInterface.setFont(base_font)
@@ -1507,14 +1500,10 @@ class GapFilletWindow(FluentWindow):
         self.align_page = self._wrap_page(AlignPage(self.state))
         self.manual_page = self._wrap_page(ManualStitchPage(self.state))
         self.viewer_widget = AlignmentViewer()
-        self.viewer_widget.viewRecordRequested.connect(self._open_in_igv)
         self.viewer_page = self._wrap_page(self.viewer_widget)
-        self.igv_widget = PafIgvViewer()
-        self.igv_page = self._wrap_page(self.igv_widget)
         self._apply_font_and_size(self.align_page.widget(), base_font)
         self._apply_font_and_size(self.manual_page.widget(), base_font)
         self._apply_font_and_size(self.viewer_page.widget(), base_font)
-        self._apply_font_and_size(self.igv_page.widget(), base_font)
 
         # Register pages with navigation
         self.addSubInterface(
@@ -1536,18 +1525,10 @@ class GapFilletWindow(FluentWindow):
             "Manual stitch",
             NavigationItemPosition.TOP,
         )
-        item_igv = self.addSubInterface(
-            self.igv_page,
-            FluentIcon.ZOOM,
-            "IGV view",
-            NavigationItemPosition.TOP,
-        )
         self.stackedWidget.setCurrentWidget(self.align_page)
         self._tune_navigation(base_font)
         self._style_nav_item(item_manual, base_font)
         self._style_nav_item(item_viewer, base_font)
-        self._style_nav_item(item_igv, base_font)
-        self._style_nav_item(item_igv, base_font)
 
     def _tune_navigation(self, base_font: QtGui.QFont) -> None:
         nav_font = QtGui.QFont(base_font)
@@ -1581,13 +1562,6 @@ class GapFilletWindow(FluentWindow):
         widget.setMinimumWidth(NAV_EXPAND_WIDTH - 20)
         widget.setMaximumWidth(NAV_EXPAND_WIDTH - 12)
 
-    def _open_in_igv(self, rec) -> None:
-        if hasattr(self, "igv_widget") and self.igv_widget:
-            self.igv_widget.load_record(rec)
-            try:
-                self.switchTo(self.igv_page)
-            except Exception:
-                self.stackedWidget.setCurrentWidget(self.igv_page)
     def _apply_font_and_size(self, widget: QtWidgets.QWidget, font: QtGui.QFont) -> None:
         """Ensure controls inherit scaled font and reasonable heights."""
         if widget is None:

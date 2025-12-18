@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from gapfillet.stitcher import PafRecord
-from gapfillet.gui.theme import WIDGET_FONT_SIZE, ICON_SIZE, CONTROL_HEIGHT
+from gapneedle.stitcher import PafRecord
+from gapneedle.gui.theme import WIDGET_FONT_SIZE, ICON_SIZE, CONTROL_HEIGHT
 
 
 class PafIgvViewer(QtWidgets.QWidget):

@@ -1,9 +1,11 @@
 """
-Global UI tuning knobs for GapFillet GUI.
+Global UI tuning knobs for GapNeedle GUI.
 
 Adjust sizes and font candidates here to quickly reskin the app without hunting
 through the UI code.
 """
+
+from pathlib import Path
 
 # Font candidate priority (first available wins)
 FONT_CANDIDATES = [
@@ -50,8 +52,8 @@ NAV_FONT_SIZE = BASE_FONT_SIZE
 NAV_ICON_SIZE = int(32 * UI_SCALING)
 
 # Default working directory for file dialogs (None means OS default)
-DEFAULT_BROWSE_DIR = "/home/zxzhang/remote/mouse/KM"  # set to "/path/to/data" if you want dialogs to start there
-ALIGN_OUTPUT_DIR = "D:/projects/GapFillet/resources"
+DEFAULT_BROWSE_DIR = "/home/zxzhang/remote/mouse/ICR"  # set to "/path/to/data" if you want dialogs to start there
+ALIGN_OUTPUT_DIR = str(Path(__file__).resolve().parent.parent / "resources")
 
 # MANUAL STITCH UI
 INFO_HEIGHT = 500

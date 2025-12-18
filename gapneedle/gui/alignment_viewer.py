@@ -6,14 +6,12 @@ from typing import List
 from PyQt5 import QtCore, QtWidgets
 from qfluentwidgets import InfoBar, SpinBox, PrimaryPushButton, ComboBox, ScrollArea
 
-from gapfillet.stitcher import parse_paf
-from gapfillet.gui.theme import WIDGET_FONT_SIZE
+from gapneedle.stitcher import parse_paf
+from gapneedle.gui.theme import WIDGET_FONT_SIZE
 
 
 class AlignmentViewer(QtWidgets.QWidget):
     """Read-only view of PAF records for the current selection."""
-
-    viewRecordRequested = QtCore.pyqtSignal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
@@ -53,7 +51,7 @@ class AlignmentViewer(QtWidgets.QWidget):
         layout.addLayout(control)
 
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(13)
+        self.table.setColumnCount(12)
         self.table.setHorizontalHeaderLabels(
             [
                 "qname",
@@ -68,7 +66,6 @@ class AlignmentViewer(QtWidgets.QWidget):
                 "matches",
                 "aln_len",
                 "mapq",
-                "view",
             ]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -128,15 +125,8 @@ class AlignmentViewer(QtWidgets.QWidget):
                 f"{rec.matches:,}",
                 f"{rec.aln_len:,}",
                 rec.mapq,
-                "view",
             ]
             for col, val in enumerate(values):
-                if col == len(values) - 1:
-                    btn = PrimaryPushButton("View", self)
-                    btn.setFixedHeight(max(24, int(WIDGET_FONT_SIZE * 2)))
-                    btn.clicked.connect(lambda _, r=rec: self.viewRecordRequested.emit(r))
-                    self.table.setCellWidget(row, col, btn)
-                    continue
                 item = QtWidgets.QTableWidgetItem(str(val))
                 if col in {1, 2, 3, 6, 7, 8, 9, 10, 11}:
                     item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)

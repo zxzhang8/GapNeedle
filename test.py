@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from gapfillet import GapFillet, manual_stitch_by_coordinates
-from gapfillet.stitcher import telomere_details
+from gapneedle import GapFillet, manual_stitch_by_coordinates
+from gapneedle.stitcher import telomere_details
 
 if __name__ == "__main__":
     gf = GapFillet()
