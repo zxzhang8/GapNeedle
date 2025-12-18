@@ -42,6 +42,8 @@ GUI 使用指南
 - 输入：目标 FASTA、查询 FASTA、各自序列名；可选线程数、preset、是否反向互补查询序列。
 - 输出：PAF 文件，默认路径 `{query}.{qseq}_vs_{target}.{tseq}/{...}.paf` 写入 `resources/`（或配置的目录）。
 
+![Alignment UI](img/Alignment.png)
+
 操作示例：
 1. 在“对齐”页点击 Browse 选择目标/查询 FASTA，选择序列名。
 2. 设置线程（默认 4）、preset（默认 asm20，亦可 asm5/asm10/map-ont/...），勾选是否反向互补查询。
@@ -51,6 +53,8 @@ GUI 使用指南
 - 比对完成后，点击日志中的 PAF 路径即可在右侧查看记录，或手动加载 PAF。
 - 展示：查询/目标长度与坐标、链方向（-> 或 <-）、matches、比对长度、mapq。
 
+![Alignment viewer](img/PAF_viewer.png)
+
 ### 拼接（Stitching）
 - 输入：PAF、目标/查询 FASTA 与序列名；可复用“对齐”页上下文。
 - 过程：
@@ -58,6 +62,8 @@ GUI 使用指南
   2. 选择 PAF，自动列出候选 overlap（按长度排序）。
   3. 选择候选编号，预览断点上下文（默认各取 200bp），一致绿色，不一致橙色。
   4. 点击 Export，输入输出路径/序列名（默认 `<target>+<query>`），生成 FASTA 和同名前缀的 `.md` 日志，记录片段来源与断点。
+
+![Manual stitch](img/manual_stitch.png)
 
 反向互补比对注意事项
 ------------------

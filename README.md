@@ -45,6 +45,8 @@ Two tabs: Alignment and Manual Stitch; a log panel streams progress; long sequen
 - Input: target FASTA, query FASTA, their sequence names; optional threads, preset, reverse-complement query.
 - Output: PAF at `{query}.{qseq}_vs_{target}.{tseq}/{...}.paf` under `resources/` (configurable).
 
+![Alignment UI](img/Alignment.png)
+
 Steps:
 1) Click Browse to pick target/query FASTA, then select sequence names.  
 2) Set threads (default 4), preset (default asm20; also asm5/asm10/map-ont/...), and optionally reverse-complement query.  
@@ -54,6 +56,8 @@ Steps:
 - After alignment, click the PAF path in the log to view records, or load a PAF manually.
 - Shows: query/target lengths & coords, strand (-> or <-), matches, alignment length, mapq.
 
+![Alignment viewer](img/PAF_viewer.png)
+
 ### Stitching
 - Input: PAF plus target/query FASTA and names; can reuse Alignment tab context.
 - Flow:
@@ -61,6 +65,8 @@ Steps:
   2) Choose a PAF; candidates are listed by overlap length.
   3) Pick a candidate; preview breakpoint context (default 200bp each side), green = match, orange = mismatch.
   4) Export FASTA (default `<target>+<query>`) and a `.md` log with segment provenance and breakpoints.
+
+![Manual stitch](img/manual_stitch.png)
 
 Reverse-Complement Notes
 ------------------------
