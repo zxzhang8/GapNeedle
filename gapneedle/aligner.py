@@ -46,7 +46,7 @@ def default_paf_path(
     reverse_query: bool = False,
 ) -> Path:
     """
-    Infer default PAF path. Use FASTA 文件名 + 序列名，避免不同文件同名序列冲突。
+    Infer default PAF path. Use FASTA filename + sequence name to avoid collisions when different files share names.
     """
     safe_target = _safe_part(target_seq)
     safe_query = _safe_part(query_seq) + ("_rc" if reverse_query else "")
@@ -106,7 +106,7 @@ def run_minimap2_alignment(
     - When reuse_existing is True and the PAF already exists, the command is skipped.
     - Only the requested sequences are materialized (filter_sequences=True) to avoid
       full-assembly runtime. Disable if you want the original FASTA untouched.
-    - reverse_query=True 将查询序列在比对前取反向互补。
+    - reverse_query=True will reverse-complement the query before alignment.
     """
     output_path = (
         default_paf_path(
@@ -130,7 +130,7 @@ def run_minimap2_alignment(
             skipped=True,
         )
 
-    work_dir = Path(tempfile.mkdtemp(prefix="gapfillet_", dir=output_path.parent))
+    work_dir = Path(tempfile.mkdtemp(prefix="gapneedle_", dir=output_path.parent))
     try:
         target_records = read_fasta_sequences(target_fasta, select_names={target_seq})
         if target_seq not in target_records:

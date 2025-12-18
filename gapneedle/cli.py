@@ -4,7 +4,7 @@ Minimal CLI wrapper so users can try GapNeedle without writing code.
 import argparse
 from pathlib import Path
 
-from .stitcher import GapFillet
+from .stitcher import GapNeedle
 
 
 def main(argv=None):
@@ -36,7 +36,7 @@ def main(argv=None):
     p_scan.add_argument("--min-gap", type=int, default=10)
 
     args = parser.parse_args(argv)
-    gf = GapFillet()
+    gf = GapNeedle()
 
     if args.cmd == "align":
         run = gf.align(

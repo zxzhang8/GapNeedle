@@ -43,6 +43,7 @@ from gapneedle.gui.theme import (
     ICON_SIZE,
     LIST_PAGE_SIZE,
     DEFAULT_BROWSE_DIR,
+    DEFAULT_SAVE_DIR,
     NAV_BUTTON_HEIGHT,
     NAV_EXPAND_WIDTH,
     NAV_ICON_SIZE,
@@ -311,7 +312,7 @@ def _highlight_diff_html(a: str, b: str) -> tuple[str, str]:
 def _junction_preview_md(left: str, right: str, context: int, highlight_len: int = 10) -> str:
     """
     Markdown preview with colored junction.
-    区域一致则绿色，否则 orange。
+    Matching regions are green; mismatches are orange.
     """
     ctx = max(0, context)
     l_tail = left[-ctx:]
@@ -1178,11 +1179,8 @@ class ManualStitchPage(QtWidgets.QWidget):
         target_name = self.selected_names.get("t") or self._first_name_from_segments("t") or "target"
         query_name = self.selected_names.get("q") or self._first_name_from_segments("q") or "query"
         suggested_name = f"{target_name}+{query_name}"
-        suggested_path = (
-            Path(DEFAULT_BROWSE_DIR) / f"{suggested_name}.fa"
-            if DEFAULT_BROWSE_DIR
-            else f"{suggested_name}.fa"
-        )
+        base_dir = DEFAULT_SAVE_DIR or DEFAULT_BROWSE_DIR
+        suggested_path = Path(base_dir) / f"{suggested_name}.fa" if base_dir else f"{suggested_name}.fa"
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "Save merged FASTA",
@@ -1485,7 +1483,7 @@ class ManualStitchPage(QtWidgets.QWidget):
 # -----------------------------
 
 
-class GapFilletWindow(FluentWindow):
+class GapNeedleWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         base_font = apply_theme(self)
@@ -1608,7 +1606,7 @@ def launch() -> None:
         QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
         QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
         app = QtWidgets.QApplication(sys.argv)
-    window = GapFilletWindow()
+    window = GapNeedleWindow()
     window.show()
     sys.exit(app.exec_())
 

@@ -159,7 +159,7 @@ def _highlight_diff_md(a: str, b: str) -> Tuple[str, str]:
 def _junction_preview_md(left: str, right: str, context: int, highlight_len: int = 10) -> str:
     """
     Markdown preview with colored junction.
-    区域一致则绿色，否 orange。
+    Matching regions are green; mismatches are orange.
     """
     ctx = max(0, context)
     l_tail = left[-ctx:]
@@ -654,7 +654,7 @@ def stitch_from_paf(
 
     q_seq, q_start, q_end = _orientation_adjustment(rec, q_seq_raw)
 
-    # 计算可供选择的三段：左侧、重叠、右侧；额外的 overhang 自动拼上。
+    # Compute the three selectable segments (left/overlap/right); extra overhangs are auto-appended.
     left_common_len = min(rec.t_start, q_start)
     right_common_len = min(len(t_seq) - rec.t_end, len(q_seq) - q_end)
     overlap_len = rec.overlap
@@ -719,7 +719,7 @@ def stitch_from_paf(
     return out_path
 
 
-class GapFillet:
+class GapNeedle:
     """
     High-level helper that wraps alignment and stitching for Jupyter-friendly use.
     """

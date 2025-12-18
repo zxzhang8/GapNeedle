@@ -11,7 +11,7 @@ Key entrypoints
 
 from .aligner import run_minimap2_alignment
 from .stitcher import (
-    GapFillet,
+    GapNeedle,
     manual_stitch_by_coordinates,
     suggest_overlaps,
     stitch_from_paf,
@@ -21,7 +21,7 @@ from .gui import launch
 from .io import read_fasta_sequences, write_fasta
 
 __all__ = [
-    "GapFillet",
+    "GapNeedle",
     "run_minimap2_alignment",
     "suggest_overlaps",
     "stitch_from_paf",

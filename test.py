@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from gapneedle import GapFillet, manual_stitch_by_coordinates
+from gapneedle import GapNeedle, manual_stitch_by_coordinates
 from gapneedle.stitcher import telomere_details
 
 if __name__ == "__main__":
-    gf = GapFillet()
+    gf = GapNeedle()
     tgt = Path("/home/zxzhang/remote/mouse/ICR/ICR.ont.p_ctg.fa")
     qry = Path("/home/zxzhang/remote/mouse/ICR/ICR.all.p_ctg.fa")
     tgt_seq = "ptg000008l"

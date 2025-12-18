@@ -12,7 +12,7 @@ except ImportError as exc:
 def read_fasta_sequences(path: Path, select_names: Optional[Set[str]] = None) -> Dict[str, str]:
     """
     Load sequences from FASTA into a dict, using mappy.fastx_read for speed.
-    If select_names is provided, stops early once全部获取完成，避免全文件读入。
+    If select_names is provided, stop early once all requested names are loaded to avoid reading the entire file.
     """
     path = Path(path)
     sequences: Dict[str, str] = {}

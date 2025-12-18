@@ -9,6 +9,17 @@ dependencies = [
     "mappy>=2.24",
 ]
 
+[project.optional-dependencies]
+gui = [
+    "PyQt5>=5.15",
+    "PyQt-Fluent-Widgets>=1.5",
+]
+all = [
+    "mappy>=2.24",
+    "PyQt5>=5.15",
+    "PyQt-Fluent-Widgets>=1.5",
+]
+
 [project.scripts]
 gapneedle = "gapneedle.cli:main"
 

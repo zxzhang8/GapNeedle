@@ -1,9 +1,9 @@
 """
-GapNeedle 图形界面入口。
+Entry point for the GapNeedle GUI.
 
-提供 `launch()` 便捷函数，启动基于 Tkinter 的双标签页界面：
-- 对齐：选择 FASTA 与序列名（带翻页/搜索），设置线程数、preset、反向互补并启动 mappy 比对。
-- 手动拼接：沿用上一页的选择上下文，交互式添加片段坐标、预览断点并导出合并结果。
+Exposes a convenient `launch()` function that starts the two-tab Tkinter interface:
+- Align: pick FASTA files and sequence names (with paging/search), set threads/preset/reverse-complement, then run mappy.
+- Manual stitch: reuse selections from the Align tab, interactively add segment coordinates, preview junctions, and export the merged result.
 """
 
 from .app import launch
