@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass, field
 import html
 from pathlib import Path
+import sys
 from typing import Dict, List, Optional, Sequence
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -23,6 +24,11 @@ from qfluentwidgets import (
     setThemeColor,
     Theme,
 )
+
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
 try:
     import mappy as mp
