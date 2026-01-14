@@ -113,6 +113,133 @@ class FaiEntry:
     sequence: Optional[str] = None
 
 
+@dataclass
+class FastaSearchMatch:
+    seq_name: str
+    start: int
+    end: int
+
+
+def _normalize_bases(seq: str) -> str:
+    return "".join(seq.split()).upper()
+
+
+def _search_indexed_sequence(
+    path: Path, entry: FaiEntry, seq_name: str, pattern: str, reverse: bool
+) -> List[FastaSearchMatch]:
+    pat_len = len(pattern)
+    if pat_len == 0:
+        return []
+    search_pattern = reverse_complement(pattern) if reverse else pattern
+    chunk_size = max(1_000_000, pat_len * 8)
+    matches: List[FastaSearchMatch] = []
+    tail = ""
+    pos = 0
+    with path.open("rb") as fh:
+        while pos < entry.length:
+            end = min(entry.length, pos + chunk_size)
+            chunk = _read_range_from_fasta(path, entry, pos, end, handle=fh)
+            data = tail + chunk.upper()
+            start_idx = 0
+            while True:
+                idx = data.find(search_pattern, start_idx)
+                if idx == -1:
+                    break
+                start = pos - len(tail) + idx
+                end_pos = start + pat_len
+                if reverse:
+                    rc_start = entry.length - end_pos
+                    rc_end = entry.length - start
+                    matches.append(FastaSearchMatch(seq_name, rc_start, rc_end))
+                else:
+                    matches.append(FastaSearchMatch(seq_name, start, end_pos))
+                start_idx = idx + 1
+            if pat_len > 1:
+                tail = data[-(pat_len - 1) :]
+            else:
+                tail = ""
+            pos = end
+    return matches
+
+
+def _search_fasta_for_sequence(
+    path: Path, pattern: str, seq_name: Optional[str] = None, reverse: bool = False
+) -> List[FastaSearchMatch]:
+    """Stream search for pattern in FASTA; returns all matches (0-based, end-exclusive)."""
+    pattern = _normalize_bases(pattern)
+    if not pattern:
+        return []
+    if seq_name:
+        fai_path = Path(str(path) + ".fai")
+        if fai_path.exists():
+            try:
+                idx = _read_index_from_fai(fai_path)
+                entry = idx.get(seq_name)
+                if entry:
+                    return _search_indexed_sequence(path, entry, seq_name, pattern, reverse)
+            except Exception:
+                pass
+    pat_len = len(pattern)
+    search_pattern = reverse_complement(pattern) if reverse else pattern
+    tail = ""
+    pos = 0
+    current_name: Optional[str] = None
+    active = seq_name is None
+    matches: List[FastaSearchMatch] = []
+    pending: List[FastaSearchMatch] = []
+    current_len = 0
+    current_active = False
+    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+        for raw_line in fh:
+            if raw_line.startswith(">"):
+                if reverse and current_active and current_name is not None:
+                    for match in pending:
+                        rc_start = current_len - match.end
+                        rc_end = current_len - match.start
+                        matches.append(FastaSearchMatch(current_name, rc_start, rc_end))
+                    pending = []
+                current_name = raw_line[1:].strip().split(" ", 1)[0] or "(unnamed)"
+                current_active = seq_name is None or current_name == seq_name
+                active = current_active
+                pos = 0
+                current_len = 0
+                tail = ""
+                continue
+            if not active:
+                continue
+            chunk = raw_line.strip()
+            if not chunk:
+                continue
+            if current_name is None:
+                current_name = "(unnamed)"
+            chunk = chunk.upper()
+            current_len += len(chunk)
+            data = tail + chunk
+            start_idx = 0
+            while True:
+                idx = data.find(search_pattern, start_idx)
+                if idx == -1:
+                    break
+                start = pos - len(tail) + idx
+                end = start + pat_len
+                if reverse:
+                    pending.append(FastaSearchMatch(current_name, start, end))
+                else:
+                    matches.append(FastaSearchMatch(current_name, start, end))
+                start_idx = idx + 1
+            if pat_len > 1:
+                tail = data[-(pat_len - 1) :]
+            else:
+                tail = ""
+            pos += len(chunk)
+        if reverse and current_active and current_name is not None:
+            for match in pending:
+                rc_start = current_len - match.end
+                rc_end = current_len - match.start
+                matches.append(FastaSearchMatch(current_name, rc_start, rc_end))
+    return matches
+
+
 def _read_index_from_fai(fai_path: Path) -> Dict[str, FaiEntry]:
     idx: Dict[str, FaiEntry] = {}
     with Path(fai_path).open() as fh:
@@ -426,6 +553,34 @@ class AlignWorker(QtCore.QThread):
             self.failed.emit(str(exc))
 
 
+class FastaSearchWorker(QtCore.QThread):
+    done = QtCore.pyqtSignal(object)
+    failed = QtCore.pyqtSignal(str)
+
+    def __init__(
+        self,
+        fasta_path: Path,
+        query: str,
+        seq_name: Optional[str],
+        reverse: bool,
+        parent: Optional[QtCore.QObject] = None,
+    ):
+        super().__init__(parent)
+        self.fasta_path = fasta_path
+        self.query = query
+        self.seq_name = seq_name
+        self.reverse = reverse
+
+    def run(self) -> None:
+        try:
+            matches = _search_fasta_for_sequence(
+                self.fasta_path, self.query, self.seq_name, self.reverse
+            )
+            self.done.emit(matches)
+        except Exception as exc:  # pragma: no cover
+            self.failed.emit(str(exc))
+
+
 # -----------------------------
 # UI widgets
 # -----------------------------
@@ -591,6 +746,174 @@ class LogConsole(QtWidgets.QTextEdit):
 
     def clear_log(self) -> None:
         self.clear()
+
+
+class FastaSearchPage(QtWidgets.QWidget):
+    def __init__(self, state: AppState, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.setObjectName("fastaSearchPage")
+        self.state = state
+        self.worker: Optional[FastaSearchWorker] = None
+        self.name_loader: Optional[NameLoader] = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
+        layout.setSpacing(PANEL_PADDING)
+
+        title = QtWidgets.QLabel("FASTA sequence search")
+        title_font = QtGui.QFont()
+        title_font.setPointSize(HERO_FONT_SIZE)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        form = QtWidgets.QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+
+        self.path_edit = LineEdit(self)
+        self.path_edit.editingFinished.connect(self._load_names)
+        form.addWidget(QtWidgets.QLabel("FASTA file"), 0, 0)
+        form.addWidget(self.path_edit, 0, 1)
+        browse_btn = PushButton("Browse", self)
+        browse_btn.clicked.connect(self._browse)
+        form.addWidget(browse_btn, 0, 2)
+
+        self.seq_combo = QtWidgets.QComboBox(self)
+        self.seq_combo.setEditable(True)
+        self.seq_combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+        self.seq_combo.completer().setFilterMode(QtCore.Qt.MatchContains)
+        self.seq_combo.completer().setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        form.addWidget(QtWidgets.QLabel("Sequence name"), 1, 0)
+        form.addWidget(self.seq_combo, 1, 1)
+        load_btn = PushButton("Load names", self)
+        load_btn.clicked.connect(self._load_names)
+        form.addWidget(load_btn, 1, 2)
+
+        self.reverse_check = CheckBox("Reverse-complement target", self)
+        form.addWidget(self.reverse_check, 2, 1)
+
+        layout.addLayout(form)
+
+        layout.addWidget(QtWidgets.QLabel("Query sequence"))
+        self.query_edit = QtWidgets.QTextEdit(self)
+        self.query_edit.setPlaceholderText("Paste A/C/G/T (whitespace ignored)")
+        font = QtGui.QFont()
+        font.setPointSize(WIDGET_FONT_SIZE)
+        self.query_edit.setFont(font)
+        self.query_edit.setMinimumHeight(180)
+        layout.addWidget(self.query_edit)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        self.search_btn = PrimaryPushButton("Search", self, icon=FluentIcon.SEARCH)
+        self.search_btn.clicked.connect(self._start_search)
+        clear_btn = PushButton("Clear", self, icon=FluentIcon.DELETE)
+        clear_btn.clicked.connect(self._clear)
+        btn_row.addWidget(self.search_btn)
+        btn_row.addWidget(clear_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.result_label = QtWidgets.QLabel("Results")
+        layout.addWidget(self.result_label)
+        self.result_table = QtWidgets.QTableWidget(self)
+        self.result_table.setColumnCount(5)
+        self.result_table.setHorizontalHeaderLabels(["seq_name", "start0", "end0", "start1", "end1"])
+        self.result_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.result_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.result_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.result_table.horizontalHeader().setStretchLastSection(True)
+        self.result_table.setMinimumHeight(200)
+        layout.addWidget(self.result_table, 1)
+
+    def set_fasta_path(self, path: Optional[Path]) -> None:
+        if path:
+            self.path_edit.setText(str(path))
+
+    def _browse(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select FASTA file",
+            str(DEFAULT_BROWSE_DIR or ""),
+            "FASTA files (*.fa *.fasta *.fna *.fas);;All files (*.*)",
+        )
+        if path:
+            self.path_edit.setText(path)
+            self._load_names()
+
+    def _clear(self) -> None:
+        self.query_edit.clear()
+        self.result_label.setText("Results")
+        self.result_table.setRowCount(0)
+
+    def _load_names(self) -> None:
+        path_text = self.path_edit.text().strip()
+        if not path_text:
+            return
+        fasta_path = Path(path_text)
+        if not fasta_path.is_file():
+            return
+        if self.name_loader and self.name_loader.isRunning():
+            return
+        self.seq_combo.clear()
+        self.name_loader = NameLoader(fasta_path, self.state, self)
+        self.name_loader.namesReady.connect(self._on_names_ready)
+        self.name_loader.failed.connect(lambda err: InfoBar.error("Load failed", err, parent=self))
+        self.name_loader.notice.connect(lambda msg: InfoBar.info("Index", msg, parent=self))
+        self.name_loader.start()
+
+    def _on_names_ready(self, names: List[str]) -> None:
+        self.seq_combo.clear()
+        self.seq_combo.addItems(names)
+        if names:
+            self.seq_combo.setCurrentIndex(0)
+
+    def _start_search(self) -> None:
+        if self.worker and self.worker.isRunning():
+            InfoBar.info("Running", "Search already in progress.", parent=self)
+            return
+        path_text = self.path_edit.text().strip()
+        if not path_text:
+            InfoBar.warning("Missing file", "Select a valid FASTA file.", parent=self)
+            return
+        fasta_path = Path(path_text)
+        if not fasta_path.is_file():
+            InfoBar.warning("Missing file", "Select a valid FASTA file.", parent=self)
+            return
+        seq_name = self.seq_combo.currentText().strip()
+        if not seq_name:
+            InfoBar.warning("Missing sequence", "Select a FASTA sequence name.", parent=self)
+            return
+        query = self.query_edit.toPlainText()
+        if not _normalize_bases(query):
+            InfoBar.warning("Missing query", "Enter a base sequence to search.", parent=self)
+            return
+
+        self.result_label.setText("Results (searching...)")
+        self.result_table.setRowCount(0)
+        reverse = self.reverse_check.isChecked()
+        self.worker = FastaSearchWorker(fasta_path, query, seq_name, reverse, self)
+        self.worker.done.connect(self._search_done)
+        self.worker.failed.connect(lambda err: InfoBar.error("Search failed", err, parent=self))
+        self.worker.start()
+
+    def _search_done(self, matches: List[FastaSearchMatch]) -> None:
+        suffix = " · reverse-complement" if self.reverse_check.isChecked() else ""
+        if not matches:
+            self.result_label.setText(f"Results (0 matches{suffix})")
+            return
+        self.result_label.setText(f"Results ({len(matches)} matches{suffix})")
+        self.result_table.setRowCount(len(matches))
+        for row, match in enumerate(matches):
+            start0 = match.start
+            end0 = match.end
+            start1 = start0 + 1
+            end1 = end0
+            self.result_table.setItem(row, 0, QtWidgets.QTableWidgetItem(match.seq_name))
+            self.result_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(start0)))
+            self.result_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(end0)))
+            self.result_table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(start1)))
+            self.result_table.setItem(row, 4, QtWidgets.QTableWidgetItem(str(end1)))
+        self.result_table.resizeColumnsToContents()
 
 
 class AlignPage(QtWidgets.QWidget):
@@ -1506,6 +1829,7 @@ class GapNeedleWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         base_font = apply_theme(self)
+        self.base_font = base_font
         self.state = AppState()
         self.setWindowTitle("GapNeedle · Fluent GUI")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
@@ -1515,10 +1839,12 @@ class GapNeedleWindow(FluentWindow):
             pass
 
         self.align_page = self._wrap_page(AlignPage(self.state))
+        self.search_page = self._wrap_page(FastaSearchPage(self.state))
         self.manual_page = self._wrap_page(ManualStitchPage(self.state))
         self.viewer_widget = AlignmentViewer()
         self.viewer_page = self._wrap_page(self.viewer_widget)
         self._apply_font_and_size(self.align_page.widget(), base_font)
+        self._apply_font_and_size(self.search_page.widget(), base_font)
         self._apply_font_and_size(self.manual_page.widget(), base_font)
         self._apply_font_and_size(self.viewer_page.widget(), base_font)
 
@@ -1527,6 +1853,12 @@ class GapNeedleWindow(FluentWindow):
             self.align_page,
             FluentIcon.SEND,
             "Align",
+            position=NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self.search_page,
+            FluentIcon.SEARCH,
+            "FASTA search",
             position=NavigationItemPosition.TOP,
         )
 
