@@ -1283,8 +1283,10 @@ class ManualStitchPage(QtWidgets.QWidget):
             if not self.indexes.get(src_key):
                 return
         try:
-            start = int(self.start_edit.text())
-            end = int(self.end_edit.text())
+            start_text = self.start_edit.text().replace(",", "").strip()
+            end_text = self.end_edit.text().replace(",", "").strip()
+            start = int(start_text)
+            end = int(end_text)
         except ValueError:
             InfoBar.warning("Invalid", "start/end must be integers.", parent=self)
             return
