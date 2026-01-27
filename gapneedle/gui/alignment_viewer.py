@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import random
 from typing import List
 
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 from qfluentwidgets import InfoBar, SpinBox, PrimaryPushButton, ComboBox, ScrollArea
 
 from gapneedle.stitcher import parse_paf
@@ -47,6 +48,9 @@ class AlignmentViewer(QtWidgets.QWidget):
         apply_btn = PrimaryPushButton("Apply", self)
         apply_btn.clicked.connect(self._apply_filter_sort)
         control.addWidget(apply_btn, 0, 2, 2, 1)
+        color_btn = PrimaryPushButton("Random color", self)
+        color_btn.clicked.connect(self._apply_random_row_color)
+        control.addWidget(color_btn, 0, 3, 2, 1, alignment=QtCore.Qt.AlignRight)
         control.setColumnStretch(3, 1)
         layout.addLayout(control)
 
@@ -132,3 +136,34 @@ class AlignmentViewer(QtWidgets.QWidget):
                     item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 self.table.setItem(row, col, item)
         self.table.resizeColumnsToContents()
+
+    def _apply_random_row_color(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            InfoBar.info("No selection", "Select a row first.", parent=self)
+            return
+        first_item = self.table.item(row, 0)
+        is_colored = bool(first_item and first_item.data(QtCore.Qt.UserRole))
+        if is_colored:
+            for col in range(self.table.columnCount()):
+                item = self.table.item(row, col)
+                if item is not None:
+                    item.setBackground(QtGui.QBrush())
+                    if col == 0:
+                        item.setData(QtCore.Qt.UserRole, False)
+            return
+        color = self._random_row_color()
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item is not None:
+                item.setBackground(color)
+                if col == 0:
+                    item.setData(QtCore.Qt.UserRole, True)
+
+    def _random_row_color(self) -> QtGui.QColor:
+        return QtGui.QColor(
+            random.randint(60, 200),
+            random.randint(60, 200),
+            random.randint(60, 200),
+            55,
+        )
