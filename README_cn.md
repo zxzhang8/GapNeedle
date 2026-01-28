@@ -52,6 +52,8 @@ GUI 使用指南
 ### 结果查看（Alignment Viewer）
 - 比对完成后，点击日志中的 PAF 路径即可在右侧查看记录，或手动加载 PAF。
 - 展示：查询/目标长度与坐标、链方向（-> 或 <-）、matches、比对长度、mapq。
+- Query index 映射：选择记录后输入下标，映射到目标序列；要求 PAF 含 `cg:Z`。
+- “Map details” 标签页展示计算过程（插入/删除累计、CIGAR 总计、失败原因）。
 
 ![Alignment viewer](img/PAF_viewer.png)
 

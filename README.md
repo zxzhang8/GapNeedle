@@ -55,6 +55,8 @@ Steps:
 ### Alignment Viewer
 - After alignment, click the PAF path in the log to view records, or load a PAF manually.
 - Shows: query/target lengths & coords, strand (-> or <-), matches, alignment length, mapq.
+- Query index mapping: select a record, enter a query index, map to target; requires `cg:Z` in PAF.
+- Map details tab explains the calculation (insertions/deletions before the index, CIGAR totals, reason).
 
 ![Alignment viewer](img/PAF_viewer.png)
 
