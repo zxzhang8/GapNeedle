@@ -43,6 +43,179 @@ class PafRecord:
     def overlap(self) -> int:
         return min(self.t_end - self.t_start, self.q_end - self.q_start)
 
+    def tag_value(self, tag: str) -> Optional[str]:
+        prefix = f"{tag}:"
+        for item in self.extras:
+            if item.startswith(prefix):
+                parts = item.split(":", 2)
+                if len(parts) == 3:
+                    return parts[2]
+        return None
+
+    @property
+    def cigar(self) -> Optional[str]:
+        return self.tag_value("cg")
+
+
+@dataclass
+class MappingResult:
+    t_pos: Optional[int]
+    reason: str
+    q_pos: int
+    q_pos_oriented: Optional[int]
+    op: Optional[str]
+    op_len: int
+    op_offset: int
+    counts_before: dict
+    counts_total: dict
+    q_consumed_before: int
+    t_consumed_before: int
+
+
+def _parse_cigar_ops(cigar: str) -> List[Tuple[int, str]]:
+    ops: List[Tuple[int, str]] = []
+    num = ""
+    for ch in cigar:
+        if ch.isdigit():
+            num += ch
+            continue
+        if not num:
+            continue
+        ops.append((int(num), ch))
+        num = ""
+    return ops
+
+
+def map_query_to_target_detail(rec: PafRecord, q_pos: int) -> MappingResult:
+    """
+    Map a query coordinate to target using cg:Z CIGAR.
+    Returns MappingResult. t_pos is 0-based if present; otherwise None.
+    """
+    cigar = rec.cigar
+    if not cigar:
+        return MappingResult(
+            t_pos=None,
+            reason="missing_cigar",
+            q_pos=q_pos,
+            q_pos_oriented=None,
+            op=None,
+            op_len=0,
+            op_offset=0,
+            counts_before={},
+            counts_total={},
+            q_consumed_before=0,
+            t_consumed_before=0,
+        )
+    if q_pos < rec.q_start or q_pos >= rec.q_end:
+        return MappingResult(
+            t_pos=None,
+            reason="out_of_range",
+            q_pos=q_pos,
+            q_pos_oriented=None,
+            op=None,
+            op_len=0,
+            op_offset=0,
+            counts_before={},
+            counts_total={},
+            q_consumed_before=0,
+            t_consumed_before=0,
+        )
+
+    if rec.strand == "+":
+        q_pos_oriented = q_pos
+        q_cursor = rec.q_start
+    else:
+        q_pos_oriented = rec.q_len - 1 - q_pos
+        q_cursor = rec.q_len - rec.q_end
+
+    t_cursor = rec.t_start
+    counts_total = {k: 0 for k in ("M", "=", "X", "I", "D", "N", "S", "H", "P")}
+    counts_before = {k: 0 for k in ("M", "=", "X", "I", "D", "N", "S", "H", "P")}
+    q_consumed_before = 0
+    t_consumed_before = 0
+    for length, op in _parse_cigar_ops(cigar):
+        if op in counts_total:
+            counts_total[op] += length
+        if op in {"M", "=", "X"}:
+            if q_pos_oriented < q_cursor + length:
+                offset = q_pos_oriented - q_cursor
+                return MappingResult(
+                    t_pos=t_cursor + offset,
+                    reason="ok",
+                    q_pos=q_pos,
+                    q_pos_oriented=q_pos_oriented,
+                    op=op,
+                    op_len=length,
+                    op_offset=offset,
+                    counts_before=counts_before,
+                    counts_total=counts_total,
+                    q_consumed_before=q_consumed_before,
+                    t_consumed_before=t_consumed_before,
+                )
+            q_cursor += length
+            t_cursor += length
+            counts_before[op] += length
+            q_consumed_before += length
+            t_consumed_before += length
+        elif op in {"I", "S"}:
+            if q_pos_oriented < q_cursor + length:
+                offset = q_pos_oriented - q_cursor
+                return MappingResult(
+                    t_pos=None,
+                    reason="insertion",
+                    q_pos=q_pos,
+                    q_pos_oriented=q_pos_oriented,
+                    op=op,
+                    op_len=length,
+                    op_offset=offset,
+                    counts_before=counts_before,
+                    counts_total=counts_total,
+                    q_consumed_before=q_consumed_before,
+                    t_consumed_before=t_consumed_before,
+                )
+            q_cursor += length
+            counts_before[op] += length
+            q_consumed_before += length
+        elif op in {"D", "N"}:
+            t_cursor += length
+            counts_before[op] += length
+            t_consumed_before += length
+        elif op in {"H", "P"}:
+            continue
+        else:
+            # Unknown op; abort to avoid misleading mapping.
+            return MappingResult(
+                t_pos=None,
+                reason="bad_cigar",
+                q_pos=q_pos,
+                q_pos_oriented=q_pos_oriented,
+                op=op,
+                op_len=length,
+                op_offset=0,
+                counts_before=counts_before,
+                counts_total=counts_total,
+                q_consumed_before=q_consumed_before,
+                t_consumed_before=t_consumed_before,
+            )
+    return MappingResult(
+        t_pos=None,
+        reason="no_mapping",
+        q_pos=q_pos,
+        q_pos_oriented=q_pos_oriented,
+        op=None,
+        op_len=0,
+        op_offset=0,
+        counts_before=counts_before,
+        counts_total=counts_total,
+        q_consumed_before=q_consumed_before,
+        t_consumed_before=t_consumed_before,
+    )
+
+
+def map_query_to_target(rec: PafRecord, q_pos: int) -> Tuple[Optional[int], str]:
+    result = map_query_to_target_detail(rec, q_pos)
+    return result.t_pos, result.reason
+
 
 def parse_paf(path: Path, target_seq: str, query_seq: str) -> List[PafRecord]:
     records: List[PafRecord] = []

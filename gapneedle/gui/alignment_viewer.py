@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import random
-from typing import List
+from typing import List, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from qfluentwidgets import InfoBar, SpinBox, PrimaryPushButton, ComboBox, ScrollArea
 
-from gapneedle.stitcher import parse_paf
+from gapneedle.stitcher import parse_paf, map_query_to_target_detail
 from gapneedle.gui.theme import WIDGET_FONT_SIZE
 
 
@@ -21,6 +21,9 @@ class AlignmentViewer(QtWidgets.QWidget):
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+
+        self.tabs = QtWidgets.QTabWidget(self)
+        outer.addWidget(self.tabs, 1)
 
         scroll = ScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -77,14 +80,40 @@ class AlignmentViewer(QtWidgets.QWidget):
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
+
+        mapper = QtWidgets.QHBoxLayout()
+        mapper.addWidget(QtWidgets.QLabel("Query index"))
+        self.qpos_spin = SpinBox(self)
+        self.qpos_spin.setRange(0, 1_000_000_000)
+        mapper.addWidget(self.qpos_spin)
+        self.map_btn = PrimaryPushButton("Map to target", self)
+        self.map_btn.clicked.connect(self._map_query_position)
+        mapper.addWidget(self.map_btn)
+        self.map_result = QtWidgets.QLabel("Select a record, then map a query index (requires cg:Z).")
+        self.map_result.setWordWrap(True)
+        mapper.addWidget(self.map_result, 1)
+        layout.addLayout(mapper)
         scroll.setWidget(container)
-        outer.addWidget(scroll)
+        self.tabs.addTab(scroll, "Records")
+
+        detail_widget = QtWidgets.QWidget()
+        detail_layout = QtWidgets.QVBoxLayout(detail_widget)
+        detail_layout.setContentsMargins(16, 16, 16, 16)
+        detail_layout.setSpacing(10)
+        self.map_detail = QtWidgets.QTextEdit(self)
+        self.map_detail.setReadOnly(True)
+        detail_layout.addWidget(self.map_detail, 1)
+        self.tabs.addTab(detail_widget, "Map details")
 
         font = self.table.font()
         font.setPointSize(WIDGET_FONT_SIZE)
         self.table.setFont(font)
+        detail_font = self.map_detail.font()
+        detail_font.setPointSize(WIDGET_FONT_SIZE)
+        self.map_detail.setFont(detail_font)
 
         self._records: list = []
+        self._shown_records: list = []
         self._current_paf: Optional[Path] = None
 
     def load_paf(self, paf_path: Path, target_seq: str, query_seq: str) -> None:
@@ -114,6 +143,7 @@ class AlignmentViewer(QtWidgets.QWidget):
         reverse = key == "matches"
         filtered.sort(key=key_fn, reverse=reverse)
 
+        self._shown_records = filtered
         self.table.setRowCount(len(filtered))
         for row, rec in enumerate(filtered):
             values = [
@@ -136,6 +166,8 @@ class AlignmentViewer(QtWidgets.QWidget):
                     item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 self.table.setItem(row, col, item)
         self.table.resizeColumnsToContents()
+        self.map_result.setText("Select a record, then map a query index (requires cg:Z).")
+        self.map_detail.setPlainText("")
 
     def _apply_random_row_color(self) -> None:
         row = self.table.currentRow()
@@ -159,6 +191,72 @@ class AlignmentViewer(QtWidgets.QWidget):
                 item.setBackground(color)
                 if col == 0:
                     item.setData(QtCore.Qt.UserRole, True)
+
+    def _map_query_position(self) -> None:
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self._shown_records):
+            InfoBar.info("No selection", "Select a PAF record first.", parent=self)
+            return
+        rec = self._shown_records[row]
+        q_pos = self.qpos_spin.value()
+        result = map_query_to_target_detail(rec, q_pos)
+        if result.reason == "missing_cigar":
+            self.map_result.setText("No mapping: PAF record lacks cg:Z (CIGAR).")
+            InfoBar.warning("Missing cg:Z", "This record has no cg:Z, mapping is disabled.", parent=self)
+            self.map_detail.setPlainText("Mapping disabled: cg:Z (CIGAR) is missing in this record.")
+            self.tabs.setCurrentIndex(1)
+            return
+        if result.reason == "out_of_range":
+            self.map_result.setText("No mapping: query index is outside the record span.")
+            self.map_detail.setPlainText("No mapping: query index is outside the PAF record span.")
+            self.tabs.setCurrentIndex(1)
+            return
+        if result.reason == "insertion":
+            self.map_result.setText("No mapping: query index falls in an insertion/soft-clip.")
+        elif result.reason != "ok" or result.t_pos is None:
+            self.map_result.setText("No mapping: CIGAR cannot resolve this position.")
+        else:
+            self.map_result.setText(
+                f"Mapped: {rec.query}[{q_pos:,}] -> {rec.target}[{result.t_pos:,}] (strand {rec.strand})"
+            )
+        self.map_detail.setPlainText(self._format_mapping_detail(rec, result))
+        self.tabs.setCurrentIndex(1)
+
+    def _format_mapping_detail(self, rec, result) -> str:
+        total = result.counts_total
+        before = result.counts_before
+        lines = [
+            f"Record: {rec.query} -> {rec.target} (strand {rec.strand})",
+            f"Query index: {result.q_pos:,}",
+        ]
+        if result.q_pos_oriented is not None and result.q_pos_oriented != result.q_pos:
+            lines.append(f"Oriented query index: {result.q_pos_oriented:,}")
+        lines.append(f"Query span: {rec.q_start:,} - {rec.q_end:,}")
+        lines.append(f"Target span: {rec.t_start:,} - {rec.t_end:,}")
+        lines.append("")
+        lines.append(f"Reason: {result.reason}")
+        if result.op:
+            lines.append(f"Operation: {result.op} (len {result.op_len}, offset {result.op_offset})")
+        if result.t_pos is not None:
+            lines.append(f"Mapped target index: {result.t_pos:,}")
+        lines.append("")
+        lines.append("Consumed before this index:")
+        lines.append(f"  Query-consuming: {result.q_consumed_before:,}")
+        lines.append(f"  Target-consuming: {result.t_consumed_before:,}")
+        lines.append("")
+        lines.append("Insertions / deletions before this index:")
+        lines.append(f"  Insertions (I): {before.get('I', 0):,}")
+        lines.append(f"  Deletions (D): {before.get('D', 0):,}")
+        lines.append("")
+        lines.append("CIGAR totals in this record:")
+        lines.append(f"  Matches (M/= /X): {total.get('M', 0) + total.get('=', 0) + total.get('X', 0):,}")
+        lines.append(f"  Insertions (I): {total.get('I', 0):,}")
+        lines.append(f"  Deletions (D): {total.get('D', 0):,}")
+        lines.append(f"  Skips (N): {total.get('N', 0):,}")
+        lines.append(f"  Soft clips (S): {total.get('S', 0):,}")
+        lines.append(f"  Hard clips (H): {total.get('H', 0):,}")
+        lines.append(f"  Pads (P): {total.get('P', 0):,}")
+        return "\n".join(lines)
 
     def _random_row_color(self) -> QtGui.QColor:
         return QtGui.QColor(
