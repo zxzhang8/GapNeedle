@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 import html
 from pathlib import Path
 import sys
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from qfluentwidgets import (
@@ -77,13 +78,14 @@ class AppState:
     query_seq: Optional[str] = None
     preset: str = "asm20"
     threads: int = 4
+    reverse_target: bool = False
     reverse_query: bool = False
     last_alignment: Optional[AlignmentRun] = None
     name_cache: Dict[Path, List[str]] = field(default_factory=dict)
     index_cache: Dict[Path, Dict[str, "FaiEntry"]] = field(default_factory=dict)
 
     def remember_alignment(
-        self, run: AlignmentRun, preset: str, reverse_query: bool
+        self, run: AlignmentRun, preset: str, reverse_target: bool, reverse_query: bool
     ) -> None:
         self.last_alignment = run
         self.target_fasta = Path(run.target_fasta)
@@ -91,6 +93,7 @@ class AppState:
         self.target_seq = run.target_seq
         self.query_seq = run.query_seq
         self.preset = preset
+        self.reverse_target = reverse_target
         self.reverse_query = reverse_query
 
     def has_selection(self) -> bool:
@@ -516,6 +519,7 @@ class AlignWorker(QtCore.QThread):
         query_seq: str,
         preset: str,
         threads: int,
+        reverse_target: bool,
         reverse_query: bool,
         parent: Optional[QtCore.QObject] = None,
     ):
@@ -526,6 +530,7 @@ class AlignWorker(QtCore.QThread):
         self.query_seq = query_seq
         self.preset = preset
         self.threads = threads
+        self.reverse_target = reverse_target
         self.reverse_query = reverse_query
 
     def run(self) -> None:
@@ -533,7 +538,8 @@ class AlignWorker(QtCore.QThread):
             self.log.emit(
                 f"Config: target={self.target_seq} ({self.target_fasta}) | "
                 f"query={self.query_seq} ({self.query_fasta}) | "
-                f"preset={self.preset} threads={self.threads} reverse={self.reverse_query}"
+                f"preset={self.preset} threads={self.threads} "
+                f"reverse_target={self.reverse_target} reverse_query={self.reverse_query}"
             )
             run = run_minimap2_alignment(
                 target_fasta=self.target_fasta,
@@ -542,6 +548,7 @@ class AlignWorker(QtCore.QThread):
                 query_seq=self.query_seq,
                 preset=self.preset,
                 threads=self.threads,
+                reverse_target=self.reverse_target,
                 reverse_query=self.reverse_query,
             )
             if run.skipped:
@@ -951,6 +958,10 @@ class AlignPage(QtWidgets.QWidget):
         opt_row.addWidget(QtWidgets.QLabel("Preset"))
         opt_row.addWidget(self.preset_combo)
 
+        self.reverse_target_check = CheckBox("Reverse-complement target", self)
+        self.reverse_target_check.setChecked(state.reverse_target)
+        opt_row.addWidget(self.reverse_target_check)
+
         self.reverse_check = CheckBox("Reverse-complement query", self)
         self.reverse_check.setChecked(state.reverse_query)
         opt_row.addWidget(self.reverse_check)
@@ -995,6 +1006,7 @@ class AlignPage(QtWidgets.QWidget):
 
         preset = self.preset_combo.currentText() or "asm10"
         threads = self.thread_spin.value()
+        reverse_t = self.reverse_target_check.isChecked()
         reverse_q = self.reverse_check.isChecked()
 
         self.worker = AlignWorker(
@@ -1004,6 +1016,7 @@ class AlignPage(QtWidgets.QWidget):
             query_seq=self.state.query_seq,
             preset=preset,
             threads=threads,
+            reverse_target=reverse_t,
             reverse_query=reverse_q,
         )
         self.worker.log.connect(self.log.write)
@@ -1013,7 +1026,12 @@ class AlignPage(QtWidgets.QWidget):
         self.worker.start()
 
     def _align_done(self, run: AlignmentRun) -> None:
-        self.state.remember_alignment(run, self.preset_combo.currentText(), self.reverse_check.isChecked())
+        self.state.remember_alignment(
+            run,
+            self.preset_combo.currentText(),
+            self.reverse_target_check.isChecked(),
+            self.reverse_check.isChecked(),
+        )
         status = "Skipped (existing PAF)" if run.skipped else "Done"
         self.log.write(f"{status} · {run.output_path}")
         InfoBar.success("Alignment finished", f"{status}: {run.output_path}", parent=self)
@@ -1038,6 +1056,10 @@ class ManualStitchPage(QtWidgets.QWidget):
         self._synced_from_state = False
         self.indexes: Dict[str, Dict[str, FaiEntry]] = {"t": {}, "q": {}}
         self.selected_names: Dict[str, Optional[str]] = {"t": None, "q": None}
+        self.last_selected_by_path: Dict[Path, str] = {}
+        self.extra_sources: Dict[str, Dict[str, object]] = {}
+        self.source_keys: List[str] = ["t", "q"]
+        self._extra_seq = 0
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(PANEL_PADDING, PANEL_PADDING, PANEL_PADDING, PANEL_PADDING)
@@ -1049,8 +1071,11 @@ class ManualStitchPage(QtWidgets.QWidget):
         reuse_btn.clicked.connect(lambda: self._reuse_state(auto_load=False))
         reuse_load_btn = PushButton("Copy & load", self, icon=FluentIcon.DOWNLOAD)
         reuse_load_btn.clicked.connect(lambda: self._reuse_state(auto_load=True))
+        load_log_btn = PushButton("Load log (.md)", self, icon=FluentIcon.DOCUMENT)
+        load_log_btn.clicked.connect(self._load_log_dialog)
         header.addWidget(reuse_btn)
         header.addWidget(reuse_load_btn)
+        header.addWidget(load_log_btn)
         header.addStretch(1)
         layout.addLayout(header)
 
@@ -1082,12 +1107,26 @@ class ManualStitchPage(QtWidgets.QWidget):
         form.addWidget(self.context_spin, 0, 4)
 
         refresh_idx = PrimaryPushButton("Load .fai", self, icon=FluentIcon.DOWNLOAD)
-        refresh_idx.clicked.connect(lambda: (self._load_index_for_source("t"), self._load_index_for_source("q")))
+        refresh_idx.clicked.connect(self._load_all_indexes)
         clear_btn = PushButton("Clear segments", self, icon=FluentIcon.DELETE)
         clear_btn.clicked.connect(self._clear_segments)
         form.addWidget(refresh_idx, 2, 3, 1, 2)
         form.addWidget(clear_btn, 3, 3, 1, 2)
         layout.addLayout(form)
+
+        extra_header = QtWidgets.QHBoxLayout()
+        extra_header.addWidget(QtWidgets.QLabel("Extra FASTA (optional)"))
+        add_extra_btn = PrimaryPushButton("Add FASTA", self, icon=FluentIcon.ADD)
+        add_extra_btn.clicked.connect(self._add_extra_source)
+        extra_header.addWidget(add_extra_btn)
+        extra_header.addStretch(1)
+        layout.addLayout(extra_header)
+
+        self.extra_list_widget = QtWidgets.QWidget(self)
+        self.extra_list_layout = QtWidgets.QVBoxLayout(self.extra_list_widget)
+        self.extra_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.extra_list_layout.setSpacing(6)
+        layout.addWidget(self.extra_list_widget)
 
         # Segment controls
         segment_row = QtWidgets.QHBoxLayout()
@@ -1111,12 +1150,15 @@ class ManualStitchPage(QtWidgets.QWidget):
         segment_row.addWidget(self.start_edit)
         segment_row.addWidget(self.end_edit)
         self.segment_reverse_check = CheckBox("Reverse-complement", self)
-        self.segment_reverse_check.setToolTip("Apply reverse-complement to this segment (query only).")
+        self.segment_reverse_check.setToolTip("Apply reverse-complement to this segment.")
         self.segment_reverse_check.setEnabled(False)
         segment_row.addWidget(self.segment_reverse_check)
         add_btn = PrimaryPushButton("Add segment", self, icon=FluentIcon.ADD)
         add_btn.clicked.connect(self._add_segment)
         segment_row.addWidget(add_btn)
+        resume_btn = PushButton("Resume", self, icon=FluentIcon.EDIT)
+        resume_btn.clicked.connect(self._resume_selected_segment)
+        segment_row.addWidget(resume_btn)
         segment_row.addStretch(1)
         layout.addLayout(segment_row)
 
@@ -1160,6 +1202,9 @@ class ManualStitchPage(QtWidgets.QWidget):
         footer.addWidget(remove_btn)
         self.length_label = QtWidgets.QLabel("")
         footer.addWidget(self.length_label)
+        self.breakpoint_status_label = QtWidgets.QLabel("")
+        self.breakpoint_status_label.setStyleSheet("color: #15803d;")
+        footer.addWidget(self.breakpoint_status_label)
         footer.addStretch(1)
         layout.addLayout(footer)
 
@@ -1180,6 +1225,104 @@ class ManualStitchPage(QtWidgets.QWidget):
         if path:
             line_edit.setText(path)
             self._load_index_for_source(source)
+
+    def _source_display_name(self, src: str) -> str:
+        if src == "t":
+            return "t (target)"
+        if src == "q":
+            return "q (query)"
+        label = self.extra_sources.get(src, {}).get("label", "extra")
+        return f"{src} ({label})"
+
+    def _source_title(self, src: str) -> str:
+        if src == "t":
+            return "Target"
+        if src == "q":
+            return "Query"
+        label = self.extra_sources.get(src, {}).get("label")
+        return f"Extra ({label})" if label else "Extra"
+
+    def _refresh_source_combo(self, keep_src: Optional[str] = None) -> None:
+        self.source_keys = ["t", "q"] + list(self.extra_sources.keys())
+        if keep_src is None and self.source_combo.count() > 0:
+            keep_src = self._current_source_key()
+        self.source_combo.blockSignals(True)
+        self.source_combo.clear()
+        for src in self.source_keys:
+            self.source_combo.addItem(self._source_display_name(src))
+        if keep_src in self.source_keys:
+            self.source_combo.setCurrentIndex(self.source_keys.index(keep_src))
+        elif self.source_keys:
+            self.source_combo.setCurrentIndex(0)
+        self.source_combo.blockSignals(False)
+        self._on_source_change()
+
+    def _next_extra_key(self) -> str:
+        while True:
+            self._extra_seq += 1
+            key = f"x{self._extra_seq}"
+            if key not in self.extra_sources:
+                return key
+
+    def _create_extra_source(self, key: str, label: str, path: str = "") -> None:
+        row = QtWidgets.QWidget(self)
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+
+        row_layout.addWidget(QtWidgets.QLabel(label))
+        line_edit = LineEdit(self)
+        line_edit.setPlaceholderText("FASTA path")
+        line_edit.setFont(self.font())
+        line_edit.setMinimumHeight(CONTROL_HEIGHT)
+        line_edit.editingFinished.connect(lambda src=key: self._load_index_for_source(src))
+        if path:
+            line_edit.setText(path)
+        row_layout.addWidget(line_edit, 2)
+        browse_btn = PushButton("Browse", self)
+        browse_btn.setFont(self.font())
+        browse_btn.setMinimumHeight(CONTROL_HEIGHT)
+        if hasattr(browse_btn, "setIconSize"):
+            browse_btn.setIconSize(QtCore.QSize(ICON_SIZE, ICON_SIZE))
+        browse_btn.clicked.connect(lambda: self._browse(line_edit, key))
+        row_layout.addWidget(browse_btn)
+        remove_btn = PushButton("Remove", self, icon=FluentIcon.DELETE)
+        remove_btn.setFont(self.font())
+        remove_btn.setMinimumHeight(CONTROL_HEIGHT)
+        if hasattr(remove_btn, "setIconSize"):
+            remove_btn.setIconSize(QtCore.QSize(ICON_SIZE, ICON_SIZE))
+        remove_btn.clicked.connect(lambda: self._remove_extra_source(key))
+        row_layout.addWidget(remove_btn)
+
+        self.extra_list_layout.addWidget(row)
+        self.extra_sources[key] = {"path": line_edit, "row": row, "label": label}
+        self.indexes[key] = {}
+        self.selected_names[key] = None
+
+    def _add_extra_source(self) -> None:
+        key = self._next_extra_key()
+        label = f"extra-{self._extra_seq}"
+        self._create_extra_source(key, label)
+        self._refresh_source_combo(keep_src=key)
+
+    def _remove_extra_source(self, key: str) -> None:
+        if any(seg.get("src") == key for seg in self.segments):
+            InfoBar.warning("In use", "Remove segments from this FASTA first.", parent=self)
+            return
+        keep_src = self._current_source_key()
+        if keep_src == key:
+            keep_src = "t"
+        info = self.extra_sources.get(key)
+        if not info:
+            return
+        row = info.get("row")
+        if row is not None:
+            row.setParent(None)
+            row.deleteLater()
+        self.extra_sources.pop(key, None)
+        self.indexes.pop(key, None)
+        self.selected_names.pop(key, None)
+        self._refresh_source_combo(keep_src=keep_src)
 
     def _reuse_state(self, auto_load: bool = False, silent: bool = False) -> None:
         if not self.state.has_selection():
@@ -1202,8 +1345,226 @@ class ManualStitchPage(QtWidgets.QWidget):
         elif not silent:
             InfoBar.success("Filled", "Copied from Align tab.", parent=self)
 
+    def _load_log_dialog(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Load manual stitch log",
+            directory=str(DEFAULT_BROWSE_DIR) if DEFAULT_BROWSE_DIR else "",
+            filter="Log (*.md *.markdown);;All (*)",
+        )
+        if not path:
+            return
+        self._load_from_log(Path(path))
+
+    def _clear_extra_sources(self) -> None:
+        for info in list(self.extra_sources.values()):
+            row = info.get("row")
+            if row is not None:
+                row.setParent(None)
+                row.deleteLater()
+        self.extra_sources.clear()
+        for key in list(self.indexes.keys()):
+            if key not in ("t", "q"):
+                self.indexes.pop(key, None)
+        for key in list(self.selected_names.keys()):
+            if key not in ("t", "q"):
+                self.selected_names.pop(key, None)
+        self.source_keys = ["t", "q"]
+        self._extra_seq = 0
+
+    def _load_from_log(self, path: Path) -> None:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as exc:
+            InfoBar.error("Read failed", str(exc), parent=self)
+            return
+        parsed = self._parse_manual_log(text)
+        if not parsed["segments"] and not parsed["target_fasta"] and not parsed["query_fasta"]:
+            InfoBar.error("Unsupported log", "No recognizable manual stitch content.", parent=self)
+            return
+
+        # Reset state before applying.
+        self._clear_segments()
+        self._clear_extra_sources()
+
+        if parsed["target_fasta"]:
+            self.target_path.setText(parsed["target_fasta"])
+        if parsed["query_fasta"]:
+            self.query_path.setText(parsed["query_fasta"])
+        if parsed["context"]:
+            self.context_spin.setValue(parsed["context"])
+
+        extra_entries = parsed["extra_fasta"]
+        src_hint = {seg["src"] for seg in parsed["segments"] if seg.get("src", "").startswith("x")}
+        extra_keys = []
+        for label, extra_path in extra_entries:
+            key = self._extra_key_from_label(label)
+            if not key:
+                key = self._next_extra_key()
+            extra_keys.append(key)
+            self._create_extra_source(key, label, extra_path)
+
+        # Ensure sources referenced by segments exist.
+        for src in sorted(src_hint):
+            if src not in self.extra_sources:
+                label = f"extra-{src[1:]}" if src.startswith("x") else "extra"
+                self._create_extra_source(src, label)
+
+        self._refresh_source_combo()
+
+        if parsed["target_seq"]:
+            self.selected_names["t"] = parsed["target_seq"]
+        if parsed["query_seq"]:
+            self.selected_names["q"] = parsed["query_seq"]
+
+        self.segments = parsed["segments"]
+        for seg in self.segments:
+            if seg.get("name"):
+                self.selected_names[seg["src"]] = seg["name"]
+
+        # Load indexes where possible for quick selection and preview.
+        self._load_index_for_source("t", info=False)
+        self._load_index_for_source("q", info=False)
+        for key in self.extra_sources.keys():
+            self._load_index_for_source(key, info=False)
+        self._refresh_segments()
+        InfoBar.success("Loaded", f"Restored from {path}", parent=self)
+
+    def _extra_key_from_label(self, label: str) -> Optional[str]:
+        if not label:
+            return None
+        m = re.match(r"extra-(\d+)$", label.strip())
+        if not m:
+            return None
+        num = int(m.group(1))
+        if num > self._extra_seq:
+            self._extra_seq = num
+        return f"x{num}"
+
+    def _parse_manual_log(self, text: str) -> Dict[str, object]:
+        data: Dict[str, object] = {
+            "target_fasta": "",
+            "query_fasta": "",
+            "extra_fasta": [],
+            "target_seq": "",
+            "query_seq": "",
+            "context": 0,
+            "segments": [],
+        }
+        lines = [line.strip() for line in text.splitlines()]
+        for line in lines:
+            if line.startswith("- Target FASTA:"):
+                data["target_fasta"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- 目标 FASTA:"):
+                data["target_fasta"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- Query FASTA:"):
+                data["query_fasta"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- 查询 FASTA:"):
+                data["query_fasta"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- Extra FASTA:"):
+                data["extra_fasta"] = self._parse_extra_entries(line.split(":", 1)[1].strip())
+            elif line.startswith("- 额外 FASTA:"):
+                data["extra_fasta"] = self._parse_extra_entries(line.split(":", 1)[1].strip())
+            elif line.startswith("- Target sequence:"):
+                data["target_seq"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- 目标序列:"):
+                data["target_seq"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- Query sequence:"):
+                data["query_seq"] = line.split(":", 1)[1].strip()
+            elif line.startswith("- 查询序列:"):
+                data["query_seq"] = line.split(":", 1)[1].strip()
+            else:
+                ctx = self._parse_context_line(line)
+                if ctx:
+                    data["context"] = ctx
+
+        segments: List[Dict[str, object]] = []
+        for line in lines:
+            seg = self._parse_segment_line(line)
+            if not seg:
+                continue
+            if not seg["name"]:
+                if seg["src"] == "t" and data["target_seq"]:
+                    seg["name"] = data["target_seq"]
+                elif seg["src"] == "q" and data["query_seq"]:
+                    seg["name"] = data["query_seq"]
+            if data["context"]:
+                seg["context"] = data["context"]
+            segments.append(seg)
+        data["segments"] = segments
+        return data
+
+    def _parse_extra_entries(self, value: str) -> List[Tuple[str, str]]:
+        if not value or value.lower() == "n/a":
+            return []
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        entries: List[Tuple[str, str]] = []
+        if any("=" in part for part in parts):
+            for part in parts:
+                if "=" in part:
+                    label, path = part.split("=", 1)
+                    entries.append((label.strip(), path.strip()))
+        else:
+            for idx, path in enumerate(parts, start=1):
+                entries.append((f"extra-{idx}", path))
+        return entries
+
+    def _parse_context_line(self, line: str) -> int:
+        m = re.search(r"each\s+(\d+)\s*bp", line, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        m = re.search(r"各取\s*(\d+)\s*bp", line)
+        if m:
+            return int(m.group(1))
+        return 0
+
+    def _parse_segment_line(self, line: str) -> Optional[Dict[str, object]]:
+        if not line.startswith("- ["):
+            return None
+        if "length" not in line and "长度" not in line:
+            return None
+        matches = list(re.finditer(r"(\d+)\s*[-–]\s*(\d+)", line))
+        if not matches:
+            return None
+        start_s, end_s = matches[-1].groups()
+        start = int(start_s)
+        end = int(end_s)
+        src = None
+        parens = re.findall(r"\(([^()]+)\)", line)
+        for value in reversed(parens):
+            value = value.strip()
+            if re.match(r"^(t|q|x\d+)$", value):
+                src = value
+                break
+        if not src:
+            return None
+        rc_flag = "(RC)" in line
+        name = ""
+        before = line[: matches[-1].start()]
+        last_paren = before.rfind(")")
+        if last_paren != -1:
+            name = before[last_paren + 1 :].strip()
+            if name.endswith("(RC)"):
+                name = name[:-4].strip()
+                rc_flag = True
+        return {
+            "src": src,
+            "name": name,
+            "start": start,
+            "end": end,
+            "reverse": rc_flag,
+        }
+
     def _get_path_for_source(self, src: str) -> Optional[Path]:
-        text = self.target_path.text() if src == "t" else self.query_path.text()
+        if src == "t":
+            text = self.target_path.text()
+        elif src == "q":
+            text = self.query_path.text()
+        else:
+            info = self.extra_sources.get(src)
+            text = ""
+            if info and isinstance(info.get("path"), LineEdit):
+                text = info["path"].text()
         if not text:
             return None
         return Path(text)
@@ -1212,7 +1573,7 @@ class ManualStitchPage(QtWidgets.QWidget):
         path = self._get_path_for_source(src)
         if path is None or not path.exists():
             if info:
-                InfoBar.error("Missing file", f"Set {'target' if src == 't' else 'query'} FASTA first.", parent=self)
+                InfoBar.error("Missing file", f"Set {self._source_title(src)} FASTA first.", parent=self)
             return
         if info and not Path(str(path) + ".fai").exists():
             InfoBar.info(
@@ -1229,24 +1590,34 @@ class ManualStitchPage(QtWidgets.QWidget):
             if info:
                 InfoBar.success(
                     "Index ready",
-                    f"{'Target' if src == 't' else 'Query'}: {len(idx):,} sequences loaded.",
+                    f"{self._source_title(src)}: {len(idx):,} sequences loaded.",
                     parent=self,
                 )
         except Exception as exc:  # pragma: no cover
             if info:
                 InfoBar.error("Index failed", str(exc), parent=self)
 
+    def _load_all_indexes(self) -> None:
+        for src in ["t", "q"] + list(self.extra_sources.keys()):
+            self._load_index_for_source(src)
+
     def _current_source_key(self) -> str:
-        return "t" if self.source_combo.currentIndex() == 0 else "q"
+        idx = self.source_combo.currentIndex()
+        if idx < 0 or idx >= len(self.source_keys):
+            return "t"
+        return self.source_keys[idx]
 
     def _on_source_change(self) -> None:
         src = self._current_source_key()
-        self.segment_reverse_check.setEnabled(src == "q")
+        self.segment_reverse_check.setEnabled(True)
         self._populate_seq_options()
 
     def _on_seq_change(self, name: str) -> None:
         src = self._current_source_key()
         self.selected_names[src] = name or None
+        path = self._get_path_for_source(src)
+        if path and name:
+            self.last_selected_by_path[path] = name
         idx = self.indexes.get(src, {})
         if name and name in idx:
             self.seq_len_label.setText(_format_bp(idx[name].length))
@@ -1257,7 +1628,9 @@ class ManualStitchPage(QtWidgets.QWidget):
         src = self._current_source_key()
         idx = self.indexes.get(src, {})
         names = list(idx.keys())
-        current = self.seq_combo.currentText() or (self.selected_names.get(src) or "")
+        path = self._get_path_for_source(src)
+        remembered = self.last_selected_by_path.get(path) if path else None
+        current = remembered or self.selected_names.get(src) or self.seq_combo.currentText() or ""
         self.seq_combo.blockSignals(True)
         self.seq_combo.clear()
         self.seq_combo.addItems(names)
@@ -1307,7 +1680,7 @@ class ManualStitchPage(QtWidgets.QWidget):
             "end": end,
             "length": seq_len,
             "context": ctx,
-            "reverse": bool(self.segment_reverse_check.isChecked()) if src_key == "q" else False,
+            "reverse": bool(self.segment_reverse_check.isChecked()),
         }
         self.selected_names[src_key] = seq_name
         insert_at = self.segment_list.currentRow()
@@ -1326,14 +1699,13 @@ class ManualStitchPage(QtWidgets.QWidget):
         self, seg: Dict[str, object], ctx: int, handles: Dict[Path, object]
     ) -> Dict[str, object]:
         src = seg["src"]  # type: ignore[index]
-        assert src in {"t", "q"}
         path = self._get_path_for_source(src)  # type: ignore[arg-type]
         if path is None:
             raise FileNotFoundError("FASTA path missing.")
         idx = self.indexes.get(src, {})
         name = seg.get("name")
         if name not in idx:
-            raise KeyError(f"Sequence {name} not in index.")
+            raise KeyError(f"{self._source_title(src)} sequence '{name}' not in index.")
         entry = idx[name]  # type: ignore[index]
         fh = handles.get(path)
         if entry.sequence is None:
@@ -1346,7 +1718,7 @@ class ManualStitchPage(QtWidgets.QWidget):
         start = int(seg["start"])
         end = int(seg["end"])
         seq_len = entry.length
-        reverse = bool(seg.get("reverse")) and src == "q"
+        reverse = bool(seg.get("reverse"))
         if reverse:
             # Interpret start/end on the reverse-complemented sequence.
             def rc_slice(a: int, b: int) -> str:
@@ -1418,6 +1790,7 @@ class ManualStitchPage(QtWidgets.QWidget):
 
     def _update_preview(self) -> None:
         self.preview.clear()
+        self.breakpoint_status_label.clear()
         if len(self.segments) < 2:
             self.preview.setText("Add two or more segments to show breakpoint context.")
             return
@@ -1459,6 +1832,8 @@ class ManualStitchPage(QtWidgets.QWidget):
                         f'<span style="color:red;">Right flanks differ:</span><br>'
                         f'{hi_prev}<br>{hi_curr}<br>'
                     )
+        if self._all_breakpoints_match():
+            self.breakpoint_status_label.setText("All breakpoints passed ✓")
         self._on_segment_select()
 
     def _clear_segments(self) -> None:
@@ -1471,6 +1846,24 @@ class ManualStitchPage(QtWidgets.QWidget):
             return
         del self.segments[row]
         self._refresh_segments()
+
+    def _resume_selected_segment(self) -> None:
+        row = self.segment_list.currentRow()
+        if row < 0 or row >= len(self.segments):
+            InfoBar.info("No selection", "Select a segment first.", parent=self)
+            return
+        seg = self.segments[row]
+        src = seg.get("src", "t")
+        if src not in self.source_keys:
+            self._refresh_source_combo()
+        if src in self.source_keys:
+            self.source_combo.setCurrentIndex(self.source_keys.index(src))
+        name = str(seg.get("name") or "")
+        if name:
+            self.seq_combo.setCurrentText(name)
+        self.start_edit.setText(str(seg.get("start", "")))
+        self.end_edit.setText(str(seg.get("end", "")))
+        self.segment_reverse_check.setChecked(bool(seg.get("reverse")))
 
     def _move_segment(self, delta: int) -> None:
         row = self.segment_list.currentRow()
@@ -1591,7 +1984,10 @@ class ManualStitchPage(QtWidgets.QWidget):
             for seg in self.segments:
                 enriched.append(self._materialize_segment(seg, ctx, handles))
         except Exception as exc:  # pragma: no cover
-            InfoBar.error("Operation failed", str(exc), parent=self)
+            msg = str(exc).strip()
+            if not msg:
+                msg = type(exc).__name__
+            InfoBar.error("Operation failed", msg, parent=self)
             return None
         finally:
             for fh in handles.values():
@@ -1600,6 +1996,24 @@ class ManualStitchPage(QtWidgets.QWidget):
                 except Exception:
                     pass
         return enriched
+
+    def _all_breakpoints_match(self) -> bool:
+        if len(self.segments) < 2:
+            return False
+        if not all("left_before" in seg for seg in self.segments):
+            return False
+        for i in range(len(self.segments) - 1):
+            left = self.segments[i]
+            right = self.segments[i + 1]
+            left_len = min(50, len(left["right_before"]), len(right["left_before"]))
+            right_len = min(50, len(left["right_after"]), len(right["left_after"]))
+            if left_len == 0 or right_len == 0:
+                return False
+            if left["right_before"][-left_len:] != right["left_before"][-left_len:]:
+                return False
+            if left["right_after"][:right_len] != right["left_after"][:right_len]:
+                return False
+        return True
 
     def _build_log_lines(
         self,
@@ -1621,6 +2035,13 @@ class ManualStitchPage(QtWidgets.QWidget):
             else self._format_segment_label(seg)
         )
         rc_count = sum(1 for seg in enriched if seg.get("reverse"))
+        extra_entries = []
+        for src, info in self.extra_sources.items():
+            path = self._get_path_for_source(src)
+            if path:
+                label = info.get("label") or src
+                extra_entries.append(f"{label}={path}")
+        extra_display = ", ".join(extra_entries) if extra_entries else "N/A"
 
         if as_html:
             header = [
@@ -1628,6 +2049,7 @@ class ManualStitchPage(QtWidgets.QWidget):
                 "",
                 f"- Target FASTA: {html.escape(self.target_path.text() or 'N/A')}",
                 f"- Query FASTA: {html.escape(self.query_path.text() or 'N/A')}",
+                f"- Extra FASTA: {html.escape(extra_display)}",
                 f"- Target sequence: {html.escape(target_name)}",
                 f"- Query sequence: {html.escape(query_name)}",
                 f"- Reverse-complemented segments: {rc_count}",
@@ -1654,13 +2076,14 @@ class ManualStitchPage(QtWidgets.QWidget):
             prior_right_r_label = "    Prior right flank ({src}:{name} {s}-{e}): {seq}"
             next_left_r_label = "    Next left flank ({src}:{name} {s}-{e}): {seq}"
             no_right_label = "  - No comparable right context."
-            seg_label = lambda src: "Target" if src == "t" else "Query"
+            seg_label = lambda src: self._source_title(src)
         else:
             header = [
                 "# 手动拼接记录",
                 "",
                 f"- 目标 FASTA: {self.target_path.text() or 'N/A'}",
                 f"- 查询 FASTA: {self.query_path.text() or 'N/A'}",
+                f"- 额外 FASTA: {extra_display}",
                 f"- 目标序列: {target_name}",
                 f"- 查询序列: {query_name}",
                 f"- 反向互补: {rc_count} 个片段勾选",
@@ -1687,7 +2110,13 @@ class ManualStitchPage(QtWidgets.QWidget):
             prior_right_r_label = "    前段右侧 ({src}:{name} {s}-{e}): {seq}"
             next_left_r_label = "    后段左侧 ({src}:{name} {s}-{e}): {seq}"
             no_right_label = "  - 右侧无可比对的上下文。"
-            seg_label = lambda src: "目标" if src == "t" else "查询"
+            def seg_label(src: str) -> str:
+                if src == "t":
+                    return "目标"
+                if src == "q":
+                    return "查询"
+                label = self.extra_sources.get(src, {}).get("label")
+                return f"额外({label})" if label else "额外"
 
         log_lines = list(header)
         for idx, seg in enumerate(enriched):

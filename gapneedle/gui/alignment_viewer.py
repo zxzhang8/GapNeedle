@@ -58,7 +58,7 @@ class AlignmentViewer(QtWidgets.QWidget):
         layout.addLayout(control)
 
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(12)
+        self.table.setColumnCount(13)
         self.table.setHorizontalHeaderLabels(
             [
                 "qname",
@@ -73,6 +73,7 @@ class AlignmentViewer(QtWidgets.QWidget):
                 "matches",
                 "aln_len",
                 "mapq",
+                "q-overlap",
             ]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -144,6 +145,14 @@ class AlignmentViewer(QtWidgets.QWidget):
         filtered.sort(key=key_fn, reverse=reverse)
 
         self._shown_records = filtered
+        overlaps = [False] * len(filtered)
+        for i, rec in enumerate(filtered):
+            for j, other in enumerate(filtered):
+                if i == j:
+                    continue
+                if rec.q_start < other.q_end and rec.q_end > other.q_start:
+                    overlaps[i] = True
+                    break
         self.table.setRowCount(len(filtered))
         for row, rec in enumerate(filtered):
             values = [
@@ -159,6 +168,7 @@ class AlignmentViewer(QtWidgets.QWidget):
                 f"{rec.matches:,}",
                 f"{rec.aln_len:,}",
                 rec.mapq,
+                "Yes" if overlaps[row] else "No",
             ]
             for col, val in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(str(val))
@@ -204,12 +214,10 @@ class AlignmentViewer(QtWidgets.QWidget):
             self.map_result.setText("No mapping: PAF record lacks cg:Z (CIGAR).")
             InfoBar.warning("Missing cg:Z", "This record has no cg:Z, mapping is disabled.", parent=self)
             self.map_detail.setPlainText("Mapping disabled: cg:Z (CIGAR) is missing in this record.")
-            self.tabs.setCurrentIndex(1)
             return
         if result.reason == "out_of_range":
             self.map_result.setText("No mapping: query index is outside the record span.")
             self.map_detail.setPlainText("No mapping: query index is outside the PAF record span.")
-            self.tabs.setCurrentIndex(1)
             return
         if result.reason == "insertion":
             self.map_result.setText("No mapping: query index falls in an insertion/soft-clip.")
@@ -219,8 +227,22 @@ class AlignmentViewer(QtWidgets.QWidget):
             self.map_result.setText(
                 f"Mapped: {rec.query}[{q_pos:,}] -> {rec.target}[{result.t_pos:,}] (strand {rec.strand})"
             )
+            QtWidgets.QApplication.clipboard().setText(str(result.t_pos))
+            InfoBar.success("Copied", "Target index copied to clipboard.", parent=self)
         self.map_detail.setPlainText(self._format_mapping_detail(rec, result))
-        self.tabs.setCurrentIndex(1)
+        self._switch_to_manual_page()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self.tabs.setCurrentIndex(0)
+
+    def _switch_to_manual_page(self) -> None:
+        main_window = self.window()
+        if hasattr(main_window, "manual_page") and hasattr(main_window, "stackedWidget"):
+            try:
+                main_window.stackedWidget.setCurrentWidget(main_window.manual_page)
+            except Exception:
+                pass
 
     def _format_mapping_detail(self, rec, result) -> str:
         total = result.counts_total

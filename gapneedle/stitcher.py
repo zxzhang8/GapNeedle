@@ -477,6 +477,7 @@ def manual_stitch_by_coordinates(
     say: MessageFn = print,
     context: int = 200,
     stop_token: str = "x",
+    reverse_target: bool = False,
     reverse_query: bool = False,
 ) -> str:
     """
@@ -488,6 +489,7 @@ def manual_stitch_by_coordinates(
     - After each addition, compares previous segment tail vs current head to hint consistency.
     - Stops when user inputs stop_token (default 'x') as the source.
     - At the end, prints all junction contexts with a colored '|' marker, then asks for FASTA path/name to save.
+    - reverse_target=True 将目标序列反向互补后再用于拼接（坐标按反向后的序列计算）。
     - reverse_query=True 将查询序列反向互补后再用于拼接（坐标按反向后的序列计算）。
     - Returns the merged sequence string (regardless of saving).
     """
@@ -495,11 +497,15 @@ def manual_stitch_by_coordinates(
     q_records = read_fasta_sequences(query_fasta, select_names={query_seq})
     if target_seq not in t_records or query_seq not in q_records:
         raise ValueError("FASTA中找不到目标序列或查询序列。")
+    t_seq = t_records[target_seq]
+    if reverse_target:
+        t_seq = reverse_complement(t_seq)
+        say("已使用目标序列的反向互补进行手动拼接。")
     q_seq = q_records[query_seq]
     if reverse_query:
         q_seq = reverse_complement(q_seq)
         say("已使用查询序列的反向互补进行手动拼接。")
-    seq_map = {"t": (target_seq, t_records[target_seq]), "q": (query_seq, q_seq)}
+    seq_map = {"t": (target_seq, t_seq), "q": (query_seq, q_seq)}
     stop_token = stop_token.lower()
     if stop_token in seq_map:
         raise ValueError(f"stop_token '{stop_token}' 不能与来源键重复，请使用其他字符。")
@@ -621,8 +627,10 @@ def manual_stitch_by_coordinates(
                 out_path = Path(out_path_raw)
                 break
             say("路径不能为空。")
-        default_name = f"{target_seq}+{query_seq}"
-        seq_name = input(f"输出序列名 (默认 {default_name}): ").strip() or default_name
+        seq_name = out_path.stem
+        if not seq_name:
+            seq_name = f"{target_seq}+{query_seq}"
+        say(f"输出序列名使用文件名: {seq_name}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         write_fasta({seq_name: merged_seq}, out_path)
         log_path = out_path.with_suffix(".md")
@@ -768,12 +776,15 @@ def stitch_from_paf(
     confirm: bool = True,
     say: MessageFn = print,
     output_fasta: Optional[Path] = None,
+    reverse_target: bool = False,
+    reverse_query: bool = False,
 ) -> Path:
     """
     Stitch two sequences using an alignment chosen from a PAF.
 
     - If selection is None and interactive=True, users will be prompted to choose.
     - Resulting FASTA contains a single merged sequence named `{target}+{query}`.
+    - reverse_target/reverse_query should match how the PAF was generated.
     """
     paf_path = Path(paf_path)
     if not paf_path.exists():
@@ -789,7 +800,11 @@ def stitch_from_paf(
         raise ValueError("FASTA中找不到目标序列或查询序列。")
 
     t_seq = target_seq_dict[target_seq]
+    if reverse_target:
+        t_seq = reverse_complement(t_seq)
     q_seq_raw = query_seq_dict[query_seq]
+    if reverse_query:
+        q_seq_raw = reverse_complement(q_seq_raw)
     t_tel_left, t_tel_right = _telomere_flags(t_seq)
     q_tel_left, q_tel_right = _telomere_flags(q_seq_raw)
     flag = lambda x: "是" if x else "否"
@@ -930,6 +945,7 @@ class GapNeedle:
         query_fasta: Path,
         target_seq: str,
         query_seq: str,
+        reverse_target: bool = False,
         reverse_query: bool = False,
         **kwargs,
     ) -> AlignmentRun:
@@ -939,6 +955,7 @@ class GapNeedle:
             query_fasta=query_fasta,
             target_seq=target_seq,
             query_seq=query_seq,
+            reverse_target=reverse_target,
             reverse_query=reverse_query,
             **kwargs,
         )
@@ -946,7 +963,11 @@ class GapNeedle:
             self.say(f"检测到已存在的 PAF，跳过运行: {run.output_path}")
         else:
             self.say(f"PAF 已生成: {run.output_path}")
-            if reverse_query:
+            if reverse_target and reverse_query:
+                self.say("注意：本次比对使用了目标与查询序列的反向互补。")
+            elif reverse_target:
+                self.say("注意：本次比对使用了目标序列的反向互补。")
+            elif reverse_query:
                 self.say("注意：本次比对使用了查询序列的反向互补。")
         self._print_paf_records(run.output_path)
         return run
@@ -962,6 +983,7 @@ class GapNeedle:
         auto_align: bool = True,
         run: Optional[AlignmentRun] = None,
         preset: Optional[str] = None,
+        reverse_target: bool = False,
         reverse_query: bool = False,
         **kwargs,
     ) -> Path:
@@ -974,6 +996,11 @@ class GapNeedle:
         query_fasta = query_fasta or (run.query_fasta if run else None)
         target_seq = target_seq or (run.target_seq if run else None)
         query_seq = query_seq or (run.query_seq if run else None)
+        if run:
+            if not reverse_target and getattr(run, "reverse_target", False):
+                reverse_target = True
+            if not reverse_query and getattr(run, "reverse_query", False):
+                reverse_query = True
 
         if not all([target_fasta, query_fasta, target_seq, query_seq]):
             raise ValueError("缺少 target/query fasta 或序列名；请传入参数或提供 run 对象。")
@@ -982,7 +1009,13 @@ class GapNeedle:
         paf_path = paf_path or getattr(run, "output_path", None) or kwargs.pop("output_path", None)
         if paf_path is None:
             paf_path = default_paf_path(
-                target_fasta, query_fasta, target_seq, query_seq, preset, reverse_query=reverse_query
+                target_fasta,
+                query_fasta,
+                target_seq,
+                query_seq,
+                preset,
+                reverse_target=reverse_target,
+                reverse_query=reverse_query,
             )
 
         if not Path(paf_path).exists():
@@ -996,6 +1029,7 @@ class GapNeedle:
                 target_seq=target_seq,
                 query_seq=query_seq,
                 preset=preset,
+                reverse_target=reverse_target,
                 reverse_query=reverse_query,
             )
 
@@ -1006,6 +1040,8 @@ class GapNeedle:
             target_seq=target_seq,
             query_seq=query_seq,
             say=self.say,
+            reverse_target=reverse_target,
+            reverse_query=reverse_query,
             **kwargs,
         )
 

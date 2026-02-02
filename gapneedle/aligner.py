@@ -26,6 +26,8 @@ class AlignmentRun:
     target_seq: str
     query_seq: str
     preset: str
+    reverse_target: bool
+    reverse_query: bool
     output_path: Path
     cmd: List[str]
     skipped: bool
@@ -43,12 +45,13 @@ def default_paf_path(
     preset: str,
     output_dir: Optional[Path] = None,
     *,
+    reverse_target: bool = False,
     reverse_query: bool = False,
 ) -> Path:
     """
     Infer default PAF path. Use FASTA filename + sequence name to avoid collisions when different files share names.
     """
-    safe_target = _safe_part(target_seq)
+    safe_target = _safe_part(target_seq) + ("_rc" if reverse_target else "")
     safe_query = _safe_part(query_seq) + ("_rc" if reverse_query else "")
     safe_preset = _safe_part(preset) if preset else "default"
     tgt_file = _safe_part(Path(target_fasta).stem)
@@ -90,6 +93,7 @@ def run_minimap2_alignment(
     reuse_existing: bool = True,
     filter_sequences: bool = True,
     dry_run: bool = False,
+    reverse_target: bool = False,
     reverse_query: bool = False,
 ) -> AlignmentRun:
     """
@@ -106,11 +110,19 @@ def run_minimap2_alignment(
     - When reuse_existing is True and the PAF already exists, the command is skipped.
     - Only the requested sequences are materialized (filter_sequences=True) to avoid
       full-assembly runtime. Disable if you want the original FASTA untouched.
+    - reverse_target=True will reverse-complement the target before alignment.
     - reverse_query=True will reverse-complement the query before alignment.
     """
     output_path = (
         default_paf_path(
-            target_fasta, query_fasta, target_seq, query_seq, preset, output_path, reverse_query=reverse_query
+            target_fasta,
+            query_fasta,
+            target_seq,
+            query_seq,
+            preset,
+            output_path,
+            reverse_target=reverse_target,
+            reverse_query=reverse_query,
         )
         if output_path is None or Path(output_path).is_dir()
         else Path(output_path)
@@ -125,6 +137,8 @@ def run_minimap2_alignment(
             target_seq=target_seq,
             query_seq=query_seq,
             preset=preset,
+            reverse_target=reverse_target,
+            reverse_query=reverse_query,
             output_path=output_path,
             cmd=[],
             skipped=True,
@@ -136,9 +150,11 @@ def run_minimap2_alignment(
         if target_seq not in target_records:
             raise ValueError(f"Sequence '{target_seq}' not found in {target_fasta}")
         t_seq_str = target_records[target_seq]
+        if reverse_target:
+            t_seq_str = reverse_complement(t_seq_str)
         t_len = len(t_seq_str)
 
-        if filter_sequences:
+        if filter_sequences or reverse_target:
             tgt_fa = work_dir / f"{target_seq}.fa"
             write_fasta({target_seq: t_seq_str}, tgt_fa)
         else:
@@ -159,6 +175,8 @@ def run_minimap2_alignment(
             target_seq=target_seq,
             query_seq=query_seq,
             preset=preset,
+            reverse_target=reverse_target,
+            reverse_query=reverse_query,
             output_path=output_path,
             cmd=cmd,
             skipped=False,

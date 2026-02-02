@@ -21,6 +21,8 @@ def main(argv=None):
     p_align.add_argument("--output", type=Path, default=None, help="输出文件或目录")
     p_align.add_argument("--minimap2", default="minimap2")
     p_align.add_argument("--no-filter", action="store_true", help="不抽取单条序列")
+    p_align.add_argument("--reverse-target", action="store_true", help="目标序列使用反向互补")
+    p_align.add_argument("--reverse-query", action="store_true", help="查询序列使用反向互补")
 
     p_stitch = sub.add_parser("stitch", help="根据 PAF 拼接")
     p_stitch.add_argument("paf")
@@ -30,6 +32,8 @@ def main(argv=None):
     p_stitch.add_argument("query_seq")
     p_stitch.add_argument("--selection", type=int, default=None, help="候选编号，不填则交互选择")
     p_stitch.add_argument("--output", type=Path, default=None, help="拼接结果 FASTA 路径")
+    p_stitch.add_argument("--reverse-target", action="store_true", help="目标序列使用反向互补")
+    p_stitch.add_argument("--reverse-query", action="store_true", help="查询序列使用反向互补")
 
     p_scan = sub.add_parser("scan-gaps", help="扫描 N 区域")
     p_scan.add_argument("fasta")
@@ -49,6 +53,8 @@ def main(argv=None):
             output_path=args.output,
             minimap2=args.minimap2,
             filter_sequences=not args.no_filter,
+            reverse_target=args.reverse_target,
+            reverse_query=args.reverse_query,
         )
         if not run.skipped:
             print("minimap2 命令:", " ".join(run.cmd))
@@ -63,6 +69,8 @@ def main(argv=None):
             selection=args.selection,
             interactive=args.selection is None,
             output_fasta=args.output,
+            reverse_target=args.reverse_target,
+            reverse_query=args.reverse_query,
         )
     elif args.cmd == "scan-gaps":
         gaps = gf.scan_gaps(args.fasta, min_gap=args.min_gap)
