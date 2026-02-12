@@ -518,7 +518,7 @@ void ManualStitchPage::onLoadLog() {
     return;
   }
 
-  // Fallback parser for legacy markdown logs from the Python version.
+  // Fallback parser for legacy markdown session logs.
   const QString text = QString::fromUtf8(raw);
   QRegularExpression lineRe(
       R"(^-\s*\[\d+\]\s*[^()]*\((t|q|x\d+)\)\s*(.+?)\s+(\d+)\s*-\s*(\d+)\s+.*$)");

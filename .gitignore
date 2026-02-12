@@ -1,14 +1,14 @@
-resources
-build
-# ------------------------------
-# Build / CMake
-# ------------------------------
+# Project runtime/output
+/resources/
+/cache/
+/logs/
+*.log
+
+# CMake / build outputs
 /build/
+/build_cpp/
 /build-*/
 /cmake-build-*/
-/out/
-/bin/
-/lib/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -17,15 +17,11 @@ CTestTestfile.cmake
 Testing/
 Makefile
 install_manifest.txt
-
-# Ninja
+build.ninja
 .ninja_deps
 .ninja_log
-build.ninja
-
-# ------------------------------
-# Qt / Qt Creator
-# ------------------------------
+dist
+# Qt generated files
 *.pro.user
 *.pro.user.*
 *.qbs.user
@@ -34,66 +30,13 @@ moc_*.cpp
 moc_*.h
 qrc_*.cpp
 ui_*.h
-*.qmlc
-*.jsc
-*.rcc
 
-# Qt runtime logs / crash
-*.dmp
+# Qt Creator local workspace
+.qtcreator/
 
-# ------------------------------
-# Compiler / Linker outputs
-# ------------------------------
-*.o
-*.obj
-*.lo
-*.la
-*.a
-*.lib
-*.so
-*.so.*
-*.dylib
-*.dll
-*.exe
-*.exp
-*.pdb
-*.ilk
-*.idb
-*.manifest
+# IDE env
+.idea
 
-# ------------------------------
-# IDEs
-# ------------------------------
-# CLion / JetBrains
-.idea/
-*.iml
-# VSCode
-.vscode/
-# Visual Studio
-.vs/
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-*.VC.db
-*.VC.opendb
-# ------------------------------
-# OS junk
-# ------------------------------
-.DS_Store
-Thumbs.db
-desktop.ini
-# ------------------------------
-# App runtime/cache/output
-# ------------------------------
-/cache/
-/logs/
-*.log
-# ------------------------------
-# Python leftovers (if repo still mixed)
-# ------------------------------
-__pycache__/
-*.py[cod]
-.venv/
-dist/
-*.egg-info/
+# dev docs
+FEATURES.md
+CPP_MIGRATION_STATUS.md
