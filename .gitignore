@@ -1,104 +1,99 @@
 resources
 build
-  # ------------------------------
-  # Build / CMake
-  # ------------------------------
-  /build/
-  /build-*/
-  /cmake-build-*/
-  /out/
-  /bin/
-  /lib/
-  CMakeCache.txt
-  CMakeFiles/
-  cmake_install.cmake
-  compile_commands.json
-  CTestTestfile.cmake
-  Testing/
-  Makefile
-  install_manifest.txt
+# ------------------------------
+# Build / CMake
+# ------------------------------
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+/bin/
+/lib/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+Makefile
+install_manifest.txt
 
-  # Ninja
-  .ninja_deps
-  .ninja_log
-  build.ninja
+# Ninja
+.ninja_deps
+.ninja_log
+build.ninja
 
-  # ------------------------------
-  # Qt / Qt Creator
-  # ------------------------------
-  *.pro.user
-  *.pro.user.*
-  *.qbs.user
-  *.autosave
-  moc_*.cpp
-  moc_*.h
-  qrc_*.cpp
-  ui_*.h
-  *.qmlc
-  *.jsc
-  *.rcc
+# ------------------------------
+# Qt / Qt Creator
+# ------------------------------
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.autosave
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+*.rcc
 
-  # Qt runtime logs / crash
-  *.dmp
+# Qt runtime logs / crash
+*.dmp
 
-  # ------------------------------
-  # Compiler / Linker outputs
-  # ------------------------------
-  *.o
-  *.obj
-  *.lo
-  *.la
-  *.a
-  *.lib
-  *.so
-  *.so.*
-  *.dylib
-  *.dll
-  *.exe
-  *.exp
-  *.pdb
-  *.ilk
-  *.idb
-  *.manifest
+# ------------------------------
+# Compiler / Linker outputs
+# ------------------------------
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.exp
+*.pdb
+*.ilk
+*.idb
+*.manifest
 
-  # ------------------------------
-  # IDEs
-  # ------------------------------
-  # CLion / JetBrains
-  .idea/
-  *.iml
-
-  # VSCode
-  .vscode/
-
-  # Visual Studio
-  .vs/
-  *.suo
-  *.user
-  *.userosscache
-  *.sln.docstates
-  *.VC.db
-  *.VC.opendb
-
-  # ------------------------------
-  # OS junk
-  # ------------------------------
-  .DS_Store
-  Thumbs.db
-  desktop.ini
-
-  # ------------------------------
-  # App runtime/cache/output
-  # ------------------------------
-  /cache/
-  /logs/
-  *.log
-
-  # ------------------------------
-  # Python leftovers (if repo still mixed)
-  # ------------------------------
-  __pycache__/
-  *.py[cod]
-  .venv/
-  dist/
-  *.egg-info/
+# ------------------------------
+# IDEs
+# ------------------------------
+# CLion / JetBrains
+.idea/
+*.iml
+# VSCode
+.vscode/
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+# ------------------------------
+# OS junk
+# ------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+# ------------------------------
+# App runtime/cache/output
+# ------------------------------
+/cache/
+/logs/
+*.log
+# ------------------------------
+# Python leftovers (if repo still mixed)
+# ------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
