@@ -1,2 +1,42 @@
-resources
-build
+# Project runtime/output
+/resources/
+/cache/
+/logs/
+*.log
+
+# CMake / build outputs
+/build/
+/build_cpp/
+/build-*/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+Makefile
+install_manifest.txt
+build.ninja
+.ninja_deps
+.ninja_log
+dist
+# Qt generated files
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.autosave
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# Qt Creator local workspace
+.qtcreator/
+
+# IDE env
+.idea
+
+# dev docs
+FEATURES.md
+CPP_MIGRATION_STATUS.md
