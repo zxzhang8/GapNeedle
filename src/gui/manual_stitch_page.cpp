@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCompleter>
+#include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -33,9 +34,21 @@ QComboBox* createSearchableCombo(QWidget* parent) {
   auto* combo = new QComboBox(parent);
   combo->setEditable(true);
   combo->setInsertPolicy(QComboBox::NoInsert);
-  combo->completer()->setFilterMode(Qt::MatchContains);
-  combo->completer()->setCaseSensitivity(Qt::CaseInsensitive);
+  auto* c = combo->completer();
+  c->setCompletionMode(QCompleter::PopupCompletion);
+  c->setFilterMode(Qt::MatchContains);
+  c->setCaseSensitivity(Qt::CaseInsensitive);
   return combo;
+}
+
+QString normalizedFsPath(QString path) {
+  path = path.trimmed();
+  if ((path.startsWith('"') && path.endsWith('"')) ||
+      (path.startsWith('\'') && path.endsWith('\''))) {
+    path = path.mid(1, path.size() - 2).trimmed();
+  }
+  if (path.isEmpty()) return {};
+  return QDir::fromNativeSeparators(path);
 }
 
 QString sourceTitle(const QString& key) {
@@ -243,9 +256,19 @@ void ManualStitchPage::onBrowseQuery() {
   }
 }
 
-void ManualStitchPage::onLoadTargetNames() { loadNamesForSource("t", targetFasta_->text().trimmed()); refreshSeqCombo(); }
+void ManualStitchPage::onLoadTargetNames() {
+  if (loadNamesForSource("t", targetFasta_->text().trimmed(), true) &&
+      sourceCombo_->currentData().toString() == "t") {
+    refreshSeqCombo();
+  }
+}
 
-void ManualStitchPage::onLoadQueryNames() { loadNamesForSource("q", queryFasta_->text().trimmed()); refreshSeqCombo(); }
+void ManualStitchPage::onLoadQueryNames() {
+  if (loadNamesForSource("q", queryFasta_->text().trimmed(), true) &&
+      sourceCombo_->currentData().toString() == "q") {
+    refreshSeqCombo();
+  }
+}
 
 void ManualStitchPage::onAddExtraSource() {
   const QString key = QString("x%1").arg(nextExtraId_++);
@@ -283,8 +306,8 @@ void ManualStitchPage::onAddExtraSource() {
     }
   });
   connect(load, &QPushButton::clicked, this, [this, key, path]() {
-    loadNamesForSource(key, path->text().trimmed());
-    if (sourceCombo_->currentData().toString() == key) {
+    if (loadNamesForSource(key, path->text().trimmed(), true) &&
+        sourceCombo_->currentData().toString() == key) {
       refreshSeqCombo();
     }
   });
@@ -576,24 +599,54 @@ void ManualStitchPage::onLoadLog() {
 
 void ManualStitchPage::appendResult(const QString& text) { result_->append(text); }
 
-void ManualStitchPage::loadNamesForSource(const QString& sourceKey, const QString& fastaPath) {
-  if (fastaPath.isEmpty()) {
+bool ManualStitchPage::loadNamesForSource(const QString& sourceKey, const QString& fastaPath, bool verbose) {
+  const QString path = normalizedFsPath(fastaPath);
+  if (path.isEmpty()) {
     namesBySource_[sourceKey] = {};
-    return;
+    if (verbose) {
+      appendResult(QString("%1: FASTA path is empty.").arg(sourceTitle(sourceKey)));
+    }
+    return false;
   }
-  namesBySource_[sourceKey] = fastaNamesFast(fastaPath);
+
+  const QFileInfo fi(path);
+  if (!fi.exists() || !fi.isFile()) {
+    namesBySource_[sourceKey] = {};
+    if (verbose) {
+      appendResult(QString("%1: FASTA not found: %2").arg(sourceTitle(sourceKey), path));
+      QMessageBox::warning(this, "Load names failed",
+                           QString("Cannot find FASTA file:\n%1").arg(path));
+    }
+    return false;
+  }
+
+  const QStringList names = fastaNamesFast(path);
+  namesBySource_[sourceKey] = names;
+  if (verbose) {
+    if (names.isEmpty()) {
+      appendResult(QString("%1: no sequence headers found in %2").arg(sourceTitle(sourceKey), path));
+      QMessageBox::warning(this, "Load names failed",
+                           QString("No FASTA headers were parsed from:\n%1").arg(path));
+      return false;
+    }
+    appendResult(QString("%1: loaded %2 sequence names from %3")
+                     .arg(sourceTitle(sourceKey))
+                     .arg(names.size())
+                     .arg(path));
+  }
+  return !names.isEmpty();
 }
 
 QString ManualStitchPage::sourcePath(const QString& sourceKey) const {
   if (sourceKey == "t") {
-    return targetFasta_->text().trimmed();
+    return normalizedFsPath(targetFasta_->text());
   }
   if (sourceKey == "q") {
-    return queryFasta_->text().trimmed();
+    return normalizedFsPath(queryFasta_->text());
   }
   auto it = extras_.find(sourceKey);
   if (it != extras_.end() && it->pathEdit) {
-    return it->pathEdit->text().trimmed();
+    return normalizedFsPath(it->pathEdit->text());
   }
   return {};
 }
@@ -765,9 +818,18 @@ QString ManualStitchPage::readSegment(const QString& sourceKey,
   if (path.isEmpty()) {
     throw std::runtime_error(("Missing FASTA path for source: " + sourceKey).toStdString());
   }
+  const QFileInfo fi(path);
+  if (!fi.exists() || !fi.isFile()) {
+    throw std::runtime_error(("FASTA file not found for source " + sourceKey + ": " + path).toStdString());
+  }
   auto it = fastaCache_.find(path.toStdString());
   if (it == fastaCache_.end()) {
-    fastaCache_[path.toStdString()] = gapneedle::readFasta(path.toStdString());
+    try {
+      fastaCache_[path.toStdString()] = gapneedle::readFasta(path.toStdString());
+    } catch (const std::exception& e) {
+      throw std::runtime_error(("Failed to open FASTA for source " + sourceKey + ": " + path +
+                                " (" + e.what() + ")").toStdString());
+    }
     it = fastaCache_.find(path.toStdString());
   }
 

@@ -72,7 +72,7 @@ class ManualStitchPage : public QWidget {
   };
 
   void appendResult(const QString& text);
-  void loadNamesForSource(const QString& sourceKey, const QString& fastaPath);
+  bool loadNamesForSource(const QString& sourceKey, const QString& fastaPath, bool verbose = false);
   QString sourcePath(const QString& sourceKey) const;
   QStringList sourceNames(const QString& sourceKey) const;
   void refreshSourceCombo(const QString& keepKey = QString());
