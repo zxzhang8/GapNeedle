@@ -1,3 +1,6 @@
 [submodule "third_party/minimap2"]
 	path = third_party/minimap2
 	url = https://github.com/lh3/minimap2.git
+[submodule "third_party/htslib"]
+	path = third_party/htslib
+	url = https://github.com/samtools/htslib.git

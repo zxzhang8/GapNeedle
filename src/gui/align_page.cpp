@@ -238,6 +238,14 @@ void AlignPage::appendLog(const QString& text) {
   log_->setTextCursor(c);
 }
 
+void AlignPage::setExternalBusy(bool busy, const QString& reason) {
+  externalBusy_ = busy;
+  externalBusyReason_ = reason;
+  if (runBtn_ && !alignRunning_) {
+    runBtn_->setEnabled(!externalBusy_);
+  }
+}
+
 void AlignPage::onBrowseTarget() {
   const QString path = QFileDialog::getOpenFileName(this,
                                                     "Select target FASTA",
@@ -372,6 +380,10 @@ QString AlignPage::computeCachePafPath() const {
 }
 
 void AlignPage::onRunAlign() {
+  if (externalBusy_) {
+    appendLog(QString("Running: %1").arg(externalBusyReason_.isEmpty() ? "another task is running" : externalBusyReason_));
+    return;
+  }
   if (alignRunning_) {
     appendLog("Running: alignment is already in progress.");
     return;
@@ -414,7 +426,7 @@ void AlignPage::onRunAlign() {
     const AlignTaskResult task = watcher->result();
     watcher->deleteLater();
     alignRunning_ = false;
-    runBtn_->setEnabled(true);
+    runBtn_->setEnabled(!externalBusy_);
     if (!task.configLine.isEmpty()) appendLog(task.configLine);
     if (!task.cacheLine.isEmpty()) appendLog(task.cacheLine);
     if (!task.error.isEmpty()) {

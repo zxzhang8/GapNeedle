@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QJsonArray>
@@ -23,6 +24,7 @@
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <fstream>
@@ -61,7 +63,43 @@ QString sourceTitle(const QString& key) {
   return key;
 }
 
+QString formatResultLine(const QString& text) {
+  const auto render = [](const QString& icon,
+                         const QString& label,
+                         const QString& fg,
+                         const QString& bg,
+                         const QString& body) {
+    return QString("<span style=\"display:inline-block; padding:1px 8px; border-radius:999px; "
+                   "font-weight:600; font-size:11px; color:%1; background:%2;\">%3 %4</span> "
+                   "<span style=\"color:#3A3A3C;\">%5</span>")
+        .arg(fg, bg, icon.toHtmlEscaped(), label.toHtmlEscaped(), body.toHtmlEscaped());
+  };
+
+  if (text.startsWith("[CHECK:RUN] ")) {
+    return render("●", "CHECK", "#245CCB", "#E8F0FE", text.mid(QString("[CHECK:RUN] ").size()));
+  }
+  if (text.startsWith("[CHECK:OK] ")) {
+    return render("✔", "CHECK OK", "#1E7A3D", "#E8F7ED", text.mid(QString("[CHECK:OK] ").size()));
+  }
+  if (text.startsWith("[CHECK:FAIL] ")) {
+    return render("✖", "CHECK FAIL", "#B3261E", "#FDEBEC", text.mid(QString("[CHECK:FAIL] ").size()));
+  }
+  if (text.startsWith("[CHECK:WARN] ")) {
+    return render("▲", "CHECK WARN", "#A15A00", "#FFF4E5", text.mid(QString("[CHECK:WARN] ").size()));
+  }
+  return text.toHtmlEscaped();
+}
+
+QString baseHtml(QChar c) {
+  return QString(c).toHtmlEscaped();
+}
+
 }  // namespace
+
+struct CheckTaskResult {
+  std::vector<ManualStitchPage::SegmentItem> segments;
+  QString error;
+};
 
 ManualStitchPage::ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* parent)
     : QWidget(parent), facade_(facade) {
@@ -181,13 +219,13 @@ ManualStitchPage::ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* 
   root->addLayout(detailRow);
 
   auto* footer = new QHBoxLayout();
-  auto* checkBtn = new QPushButton("Check breakpoints", this);
+  checkBtn_ = new QPushButton("Check breakpoints", this);
   auto* exportBtn = new QPushButton("Export merged FASTA", this);
   exportBtn->setObjectName("primaryButton");
   auto* upBtn = new QPushButton("Move up", this);
   auto* downBtn = new QPushButton("Move down", this);
   auto* removeBtn = new QPushButton("Remove selected", this);
-  footer->addWidget(checkBtn);
+  footer->addWidget(checkBtn_);
   footer->addWidget(exportBtn);
   footer->addWidget(upBtn);
   footer->addWidget(downBtn);
@@ -195,7 +233,8 @@ ManualStitchPage::ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* 
   footer->addStretch(1);
   root->addLayout(footer);
 
-  connect(checkBtn, &QPushButton::clicked, this, &ManualStitchPage::onCheckBreakpoints);
+  connect(checkBtn_, &QPushButton::clicked, this, &ManualStitchPage::onCheckBreakpoints);
+  connect(contextSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { refreshPreview(); });
   connect(exportBtn, &QPushButton::clicked, this, &ManualStitchPage::onExport);
   connect(upBtn, &QPushButton::clicked, this, &ManualStitchPage::onMoveSegmentUp);
   connect(downBtn, &QPushButton::clicked, this, &ManualStitchPage::onMoveSegmentDown);
@@ -209,6 +248,14 @@ ManualStitchPage::ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* 
   namesBySource_["t"] = {};
   namesBySource_["q"] = {};
   refreshSourceCombo("t");
+}
+
+void ManualStitchPage::setExternalBusy(bool busy, const QString& reason) {
+  externalBusy_ = busy;
+  externalBusyReason_ = reason;
+  if (checkBtn_ && !checkRunning_) {
+    checkBtn_->setEnabled(!externalBusy_);
+  }
 }
 
 void ManualStitchPage::setAlignmentContext(const QString& targetFasta,
@@ -429,15 +476,110 @@ void ManualStitchPage::onSegmentSelectionChanged() {
 }
 
 void ManualStitchPage::onCheckBreakpoints() {
+  if (externalBusy_) {
+    appendResult(QString("Check blocked: %1")
+                     .arg(externalBusyReason_.isEmpty() ? "another task is running" : externalBusyReason_));
+    return;
+  }
+  if (checkRunning_) {
+    appendResult("[CHECK:RUN] check already running.");
+    return;
+  }
   if (segments_.empty()) {
     QMessageBox::information(this, "No segments", "Add at least one segment.");
     return;
   }
-  if (!materializeAll(contextSpin_->value())) {
-    return;
+  const int context = contextSpin_->value();
+  std::vector<SegmentItem> segs = segments_;
+
+  QMap<QString, QString> pathBySource;
+  pathBySource["t"] = sourcePath("t");
+  pathBySource["q"] = sourcePath("q");
+  for (auto it = extras_.cbegin(); it != extras_.cend(); ++it) {
+    pathBySource[it.key()] = sourcePath(it.key());
   }
-  refreshPreview();
-  appendResult(allBreakpointsMatch() ? "All breakpoints passed." : "Breakpoint differences detected.");
+
+  checkRunning_ = true;
+  if (checkBtn_) checkBtn_->setEnabled(false);
+  appendResult("[CHECK:RUN] check started in background...");
+  emit checkStarted();
+
+  auto* watcher = new QFutureWatcher<CheckTaskResult>(this);
+  connect(watcher, &QFutureWatcher<CheckTaskResult>::finished, this, [this, watcher]() {
+    CheckTaskResult res = watcher->result();
+    watcher->deleteLater();
+    checkRunning_ = false;
+    if (checkBtn_) checkBtn_->setEnabled(!externalBusy_);
+    if (!res.error.isEmpty()) {
+      appendResult(QString("[CHECK:FAIL] %1").arg(res.error));
+      QMessageBox::critical(this, "Materialize failed", res.error);
+      emit checkFailed(res.error);
+      return;
+    }
+    segments_ = std::move(res.segments);
+    refreshPreview();
+    const bool ok = allBreakpointsMatch();
+    appendResult(ok ? "[CHECK:OK] all breakpoints passed."
+                    : "[CHECK:WARN] breakpoint differences detected.");
+    emit checkFinished();
+  });
+
+  watcher->setFuture(QtConcurrent::run([segs = std::move(segs), pathBySource, context]() mutable {
+    CheckTaskResult out;
+    std::unordered_map<std::string, std::shared_ptr<gapneedle::FastaIndexedReader>> cache;
+    auto readPart = [&cache, &pathBySource](const QString& sourceKey,
+                                            const QString& seqName,
+                                            int start,
+                                            int end,
+                                            bool reverse) -> QString {
+      const QString path = pathBySource.value(sourceKey).trimmed();
+      if (path.isEmpty()) {
+        throw std::runtime_error(("Missing FASTA path for source: " + sourceKey).toStdString());
+      }
+      const QFileInfo fi(path);
+      if (!fi.exists() || !fi.isFile()) {
+        throw std::runtime_error(("FASTA file not found for source " + sourceKey + ": " + path).toStdString());
+      }
+      auto it = cache.find(path.toStdString());
+      if (it == cache.end()) {
+        cache[path.toStdString()] = std::make_shared<gapneedle::FastaIndexedReader>(path.toStdString());
+        it = cache.find(path.toStdString());
+      }
+      const int len = it->second->length(seqName.toStdString());
+      if (len < 0) {
+        throw std::runtime_error(("Sequence not found: " + seqName + " in " + path).toStdString());
+      }
+      int s = std::max(0, start);
+      int e = std::min(end, len);
+      if (e <= s) return {};
+
+      if (!reverse) {
+        return QString::fromStdString(it->second->fetch(seqName.toStdString(), s, e));
+      }
+      // Keep legacy semantics: reverse-complement whole contig first, then apply [start,end).
+      // Equivalent on original strand: fetch [len-end, len-start) and reverse-complement.
+      const int rs = std::max(0, len - e);
+      const int re = std::min(len, len - s);
+      const std::string raw = it->second->fetch(seqName.toStdString(), rs, re);
+      return QString::fromStdString(gapneedle::reverseComplement(raw));
+    };
+
+    try {
+      for (auto& seg : segs) {
+        seg.seq = readPart(seg.source, seg.seqName, seg.start, seg.end, seg.reverse);
+        seg.leftBefore = readPart(seg.source, seg.seqName, std::max(0, seg.start - context), seg.start, seg.reverse);
+        seg.leftAfter = readPart(seg.source, seg.seqName, seg.start, seg.start + context, seg.reverse);
+        seg.rightBefore = readPart(seg.source, seg.seqName, std::max(0, seg.end - context), seg.end, seg.reverse);
+        seg.rightAfter = readPart(seg.source, seg.seqName, seg.end, seg.end + context, seg.reverse);
+      }
+      out.segments = std::move(segs);
+    } catch (const std::exception& e) {
+      out.error = QString::fromUtf8(e.what());
+    } catch (...) {
+      out.error = "unknown error";
+    }
+    return out;
+  }));
 }
 
 void ManualStitchPage::onExport() {
@@ -597,7 +739,7 @@ void ManualStitchPage::onLoadLog() {
   appendResult(QString("Legacy markdown session loaded: %1").arg(path));
 }
 
-void ManualStitchPage::appendResult(const QString& text) { result_->append(text); }
+void ManualStitchPage::appendResult(const QString& text) { result_->append(formatResultLine(text)); }
 
 bool ManualStitchPage::loadNamesForSource(const QString& sourceKey, const QString& fastaPath, bool verbose) {
   const QString path = normalizedFsPath(fastaPath);
@@ -731,36 +873,179 @@ void ManualStitchPage::refreshPreview() {
     return;
   }
 
+  QString html;
+  html += "<div style=\"font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif;"
+          "color:#1D1D1F;\">";
   for (int i = 0; i + 1 < static_cast<int>(segments_.size()); ++i) {
     const auto& left = segments_[i];
     const auto& right = segments_[i + 1];
-    preview_->append(QString("[%1] %2:%3 %4-%5 -> %6:%7 %8-%9")
-                         .arg(i)
-                         .arg(left.source)
-                         .arg(left.seqName)
-                         .arg(left.start)
-                         .arg(left.end)
-                         .arg(right.source)
-                         .arg(right.seqName)
-                         .arg(right.start)
-                         .arg(right.end));
-    preview_->append(junctionPreview(left.rightBefore, right.leftAfter, contextSpin_->value()));
-
-    const int ll = std::min(50, std::min(static_cast<int>(left.rightBefore.size()),
-                                         static_cast<int>(right.leftBefore.size())));
-    if (ll > 0) {
-      const bool ok = left.rightBefore.right(ll) == right.leftBefore.right(ll);
-      preview_->append(ok ? "Left flanks match" : "Left flanks differ");
-    }
-
-    const int rl = std::min(50, std::min(static_cast<int>(left.rightAfter.size()),
-                                         static_cast<int>(right.leftAfter.size())));
-    if (rl > 0) {
-      const bool ok = left.rightAfter.left(rl) == right.leftAfter.left(rl);
-      preview_->append(ok ? "Right flanks match" : "Right flanks differ");
-    }
-    preview_->append("");
+    html += renderBreakpointCardHtml(i, left, right, contextSpin_->value());
   }
+  html += "</div>";
+  preview_->setHtml(html);
+}
+
+QString ManualStitchPage::renderBreakpointCardHtml(int index,
+                                                   const SegmentItem& left,
+                                                   const SegmentItem& right,
+                                                   int contextBp) const {
+  int leftComparable = 0;
+  int leftMismatch = 0;
+  int rightComparable = 0;
+  int rightMismatch = 0;
+  const QString leftHtml = renderFlankDiffHtml("LEFT FLANK", left.rightBefore, right.leftBefore, true, contextBp,
+                                                &leftComparable, &leftMismatch);
+  const QString rightHtml = renderFlankDiffHtml("RIGHT FLANK", left.rightAfter, right.leftAfter, false, contextBp,
+                                                &rightComparable, &rightMismatch);
+
+  QString badgeIcon = "✔";
+  QString badgeLabel = "PASS";
+  QString badgeFg = "#1E7A3D";
+  QString badgeBg = "#E8F7ED";
+  if (leftComparable == 0 || rightComparable == 0) {
+    badgeIcon = "✖";
+    badgeLabel = "FAIL";
+    badgeFg = "#B3261E";
+    badgeBg = "#FDEBEC";
+  } else if (leftMismatch > 0 || rightMismatch > 0) {
+    badgeIcon = "▲";
+    badgeLabel = "WARN";
+    badgeFg = "#A15A00";
+    badgeBg = "#FFF4E5";
+  }
+
+  const int leftMatch = std::max(0, leftComparable - leftMismatch);
+  const int rightMatch = std::max(0, rightComparable - rightMismatch);
+  const int totalMismatch = leftMismatch + rightMismatch;
+  const QString bridge = junctionPreview(left.rightBefore, right.leftAfter, contextBp);
+  int sep = bridge.indexOf('|');
+  if (sep < 0) {
+    sep = bridge.size();
+  }
+
+  QString html;
+  html += "<div style=\"margin:0 0 10px 0; border:1px solid #E5E5EA; border-radius:10px; "
+          "background:#FFFFFF; padding:10px;\">";
+  html += QString("<div style=\"display:flex; align-items:center; gap:8px; margin-bottom:6px;\">"
+                  "<span style=\"display:inline-block; padding:1px 8px; border-radius:999px; "
+                  "font-weight:700; font-size:11px; color:%1; background:%2;\">%3 %4</span>"
+                  "<span style=\"font-weight:600; color:#1D1D1F;\">BP#%5</span>"
+                  "<span style=\"color:#3A3A3C;\">%6:%7 %8-%9 → %10:%11 %12-%13</span>"
+                  "</div>")
+              .arg(badgeFg,
+                   badgeBg,
+                   badgeIcon,
+                   badgeLabel,
+                   QString::number(index),
+                   left.source.toHtmlEscaped(),
+                   left.seqName.toHtmlEscaped(),
+                   QString::number(left.start),
+                   QString::number(left.end),
+                   right.source.toHtmlEscaped(),
+                   right.seqName.toHtmlEscaped(),
+                   QString::number(right.start),
+                   QString::number(right.end));
+
+  html += QString("<div style=\"font-size:12px; color:#3A3A3C; margin-bottom:8px;\">"
+                  "L:%1/%2  R:%3/%4  mismatch:%5  context:%6bp"
+                  "</div>")
+              .arg(leftMatch)
+              .arg(leftComparable)
+              .arg(rightMatch)
+              .arg(rightComparable)
+              .arg(totalMismatch)
+              .arg(contextBp);
+
+  html += leftHtml;
+  html += rightHtml;
+  html += QString("<div style=\"margin-top:8px; font-family:'SF Mono',Menlo,Consolas,monospace; font-size:12px;\">"
+                  "<span style=\"color:#6E6E73;\">%1</span>"
+                  "<span style=\"color:#1D1D1F; font-weight:600;\">|</span>"
+                  "<span style=\"color:#6E6E73;\">%2</span>"
+                  "</div>")
+              .arg(bridge.left(sep).toHtmlEscaped(),
+                   bridge.mid(std::min(sep + 1, static_cast<int>(bridge.size()))).toHtmlEscaped());
+  html += "</div>";
+  return html;
+}
+
+QString ManualStitchPage::renderFlankDiffHtml(const QString& label,
+                                              const QString& aRaw,
+                                              const QString& bRaw,
+                                              bool takeTail,
+                                              int contextBp,
+                                              int* comparableLenOut,
+                                              int* mismatchesOut) const {
+  const int ctx = std::max(0, contextBp);
+  const QString a = takeTail ? aRaw.right(std::min(ctx, static_cast<int>(aRaw.size())))
+                             : aRaw.left(std::min(ctx, static_cast<int>(aRaw.size())));
+  const QString b = takeTail ? bRaw.right(std::min(ctx, static_cast<int>(bRaw.size())))
+                             : bRaw.left(std::min(ctx, static_cast<int>(bRaw.size())));
+  const int comparable = std::min(static_cast<int>(a.size()), static_cast<int>(b.size()));
+  if (comparableLenOut) {
+    *comparableLenOut = comparable;
+  }
+
+  int mismatches = 0;
+  for (int i = 0; i < comparable; ++i) {
+    if (a[i] != b[i]) {
+      ++mismatches;
+    }
+  }
+  if (mismatchesOut) {
+    *mismatchesOut = mismatches;
+  }
+
+  QString html;
+  html += QString("<div style=\"margin:6px 0 0 0; padding:8px; border-radius:8px; background:#F7F7FA;\">"
+                  "<div style=\"font-size:11px; font-weight:700; color:#6E6E73; margin-bottom:6px;\">%1</div>")
+              .arg(label.toHtmlEscaped());
+
+  if (comparable == 0) {
+    html += "<div style=\"font-size:12px; color:#B3261E;\">✖ insufficient context for comparison</div></div>";
+    return html;
+  }
+
+  const int width = 80;
+  for (int start = 0; start < comparable; start += width) {
+    const int end = std::min(start + width, comparable);
+    QString lineA;
+    QString lineMid;
+    QString lineB;
+    for (int i = start; i < end; ++i) {
+      const bool same = (a[i] == b[i]);
+      const QString aCh = baseHtml(a[i]);
+      const QString bCh = baseHtml(b[i]);
+      if (same) {
+        lineA += aCh;
+        lineMid += "<span style=\"color:#2E7D32;\">|</span>";
+        lineB += bCh;
+      } else {
+        lineA += QString("<span style=\"color:#B3261E; background:#FDEBEC;\">%1</span>").arg(aCh);
+        lineMid += "<span style=\"color:#A15A00;\">·</span>";
+        lineB += QString("<span style=\"color:#B3261E; background:#FDEBEC;\">%1</span>").arg(bCh);
+      }
+    }
+    html += QString(
+                "<table style=\"border-collapse:collapse; margin:0; "
+                "font-family:'SF Mono',Menlo,Consolas,monospace; font-size:12px;\">"
+                "<tr>"
+                "<td style=\"padding:0 4px 0 0; color:#6E6E73; vertical-align:top;\">A:</td>"
+                "<td style=\"padding:0; vertical-align:top;\">%1</td>"
+                "</tr>"
+                "<tr>"
+                "<td style=\"padding:0 4px 0 0; color:#6E6E73; vertical-align:top;\">&nbsp;</td>"
+                "<td style=\"padding:0; vertical-align:top;\">%2</td>"
+                "</tr>"
+                "<tr>"
+                "<td style=\"padding:0 4px 0 0; color:#6E6E73; vertical-align:top;\">B:</td>"
+                "<td style=\"padding:0; vertical-align:top;\">%3</td>"
+                "</tr>"
+                "</table>")
+                .arg(lineA, lineMid, lineB);
+  }
+  html += "</div>";
+  return html;
 }
 
 bool ManualStitchPage::materializeAll(int contextBp) {
@@ -788,24 +1073,15 @@ bool ManualStitchPage::materializeSegment(SegmentItem& seg, int contextBp) {
 
 QStringList ManualStitchPage::fastaNamesFast(const QString& path) const {
   QStringList names;
-  std::ifstream in(path.toStdString());
-  if (!in) {
-    return names;
-  }
-  std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line[0] == '>') {
-      QString name = QString::fromStdString(line.substr(1)).trimmed();
-      int sp = name.indexOf(' ');
-      if (sp > 0) {
-        name = name.left(sp);
-      }
-      if (!name.isEmpty()) {
-        names.push_back(name);
-      }
+  try {
+    const auto vec = gapneedle::readFastaNamesIndexed(path.toStdString());
+    names.reserve(static_cast<qsizetype>(vec.size()));
+    for (const auto& n : vec) {
+      names.push_back(QString::fromStdString(n));
     }
+  } catch (...) {
+    return {};
   }
-  names.removeDuplicates();
   return names;
 }
 
@@ -822,31 +1098,33 @@ QString ManualStitchPage::readSegment(const QString& sourceKey,
   if (!fi.exists() || !fi.isFile()) {
     throw std::runtime_error(("FASTA file not found for source " + sourceKey + ": " + path).toStdString());
   }
-  auto it = fastaCache_.find(path.toStdString());
-  if (it == fastaCache_.end()) {
+  auto it = fastaIndexCache_.find(path.toStdString());
+  if (it == fastaIndexCache_.end()) {
     try {
-      fastaCache_[path.toStdString()] = gapneedle::readFasta(path.toStdString());
+      fastaIndexCache_[path.toStdString()] = std::make_shared<gapneedle::FastaIndexedReader>(path.toStdString());
     } catch (const std::exception& e) {
       throw std::runtime_error(("Failed to open FASTA for source " + sourceKey + ": " + path +
                                 " (" + e.what() + ")").toStdString());
     }
-    it = fastaCache_.find(path.toStdString());
+    it = fastaIndexCache_.find(path.toStdString());
   }
-
-  auto sit = it->second.find(seqName.toStdString());
-  if (sit == it->second.end()) {
+  const int len = it->second->length(seqName.toStdString());
+  if (len < 0) {
     throw std::runtime_error(("Sequence not found: " + seqName).toStdString());
   }
-  QString seq = QString::fromStdString(sit->second);
-  if (reverse) {
-    seq = QString::fromStdString(gapneedle::reverseComplement(seq.toStdString()));
-  }
-  start = std::max(0, start);
-  end = std::min(end, static_cast<int>(seq.size()));
-  if (end <= start) {
+  int s = std::max(0, start);
+  int e = std::min(end, len);
+  if (e <= s) {
     return {};
   }
-  return seq.mid(start, end - start);
+
+  if (!reverse) {
+    return QString::fromStdString(it->second->fetch(seqName.toStdString(), s, e));
+  }
+  const int rs = std::max(0, len - e);
+  const int re = std::min(len, len - s);
+  const std::string raw = it->second->fetch(seqName.toStdString(), rs, re);
+  return QString::fromStdString(gapneedle::reverseComplement(raw));
 }
 
 QString ManualStitchPage::junctionPreview(const QString& left, const QString& right, int contextBp) const {

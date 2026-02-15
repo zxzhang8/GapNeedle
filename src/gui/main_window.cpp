@@ -106,6 +106,7 @@ void MainWindow::setupConnections() {
           &AlignPage::alignmentStarted,
           this,
           [this](const QString& targetSeq, const QString& querySeq) {
+            manualPage_->setExternalBusy(true, "alignment is running");
             setStatusIcon("running", QString("Running alignment: %1 <- %2").arg(targetSeq, querySeq));
             statusBar()->showMessage(QString("Running alignment: %1 <- %2").arg(targetSeq, querySeq));
           });
@@ -120,14 +121,34 @@ void MainWindow::setupConnections() {
                  const QString& queryFasta) {
             pafViewerPage_->setContext(pafPath, targetSeq, querySeq, true);
             manualPage_->setAlignmentContext(targetFasta, queryFasta, targetSeq, querySeq, pafPath);
+            manualPage_->setExternalBusy(false);
             setStatusIcon("success", QString("Alignment ready: %1").arg(pafPath));
             statusBar()->showMessage(QString("Alignment ready: %1").arg(pafPath));
             gapneedle::ui::showToast(this, "Alignment completed and context synced", "success");
           });
 
   connect(alignPage_, &AlignPage::alignmentFailed, this, [this](const QString& errorMessage) {
+    manualPage_->setExternalBusy(false);
     setStatusIcon("error", errorMessage);
     statusBar()->showMessage(QString("Alignment failed: %1").arg(errorMessage));
+  });
+
+  connect(manualPage_, &ManualStitchPage::checkStarted, this, [this]() {
+    alignPage_->setExternalBusy(true, "breakpoint check is running");
+    setStatusIcon("running", "Checking breakpoints...");
+    statusBar()->showMessage("Checking breakpoints...");
+  });
+
+  connect(manualPage_, &ManualStitchPage::checkFinished, this, [this]() {
+    alignPage_->setExternalBusy(false);
+    setStatusIcon("success", "Breakpoint check completed");
+    statusBar()->showMessage("Breakpoint check completed");
+  });
+
+  connect(manualPage_, &ManualStitchPage::checkFailed, this, [this](const QString& errorMessage) {
+    alignPage_->setExternalBusy(false);
+    setStatusIcon("error", errorMessage);
+    statusBar()->showMessage(QString("Breakpoint check failed: %1").arg(errorMessage));
   });
 }
 

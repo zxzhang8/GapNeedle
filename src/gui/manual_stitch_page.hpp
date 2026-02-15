@@ -9,6 +9,7 @@
 #include <QWidget>
 
 #include <optional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +27,8 @@ class ManualStitchPage : public QWidget {
 
  public:
   explicit ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* parent = nullptr);
+  bool isCheckRunning() const { return checkRunning_; }
+  void setExternalBusy(bool busy, const QString& reason = QString());
 
  public slots:
   void setAlignmentContext(const QString& targetFasta,
@@ -51,7 +54,12 @@ class ManualStitchPage : public QWidget {
   void onExport();
   void onLoadLog();
 
- private:
+ signals:
+  void checkStarted();
+  void checkFinished();
+  void checkFailed(const QString& errorMessage);
+
+ public:
   struct SegmentItem {
     QString source;
     QString seqName;
@@ -65,6 +73,7 @@ class ManualStitchPage : public QWidget {
     QString rightAfter;
   };
 
+ private:
   struct ExtraSourceRow {
     QString key;
     QWidget* rowWidget{nullptr};
@@ -79,6 +88,14 @@ class ManualStitchPage : public QWidget {
   void refreshSeqCombo();
   void refreshSegments();
   void refreshPreview();
+  QString renderBreakpointCardHtml(int index, const SegmentItem& left, const SegmentItem& right, int contextBp) const;
+  QString renderFlankDiffHtml(const QString& label,
+                              const QString& aRaw,
+                              const QString& bRaw,
+                              bool takeTail,
+                              int contextBp,
+                              int* comparableLenOut,
+                              int* mismatchesOut) const;
   bool materializeAll(int contextBp);
   bool materializeSegment(SegmentItem& seg, int contextBp);
   QStringList fastaNamesFast(const QString& path) const;
@@ -106,10 +123,14 @@ class ManualStitchPage : public QWidget {
   QTextEdit* preview_{nullptr};
   QTextEdit* detail_{nullptr};
   QTextEdit* result_{nullptr};
+  QPushButton* checkBtn_{nullptr};
 
   std::vector<SegmentItem> segments_;
   QMap<QString, ExtraSourceRow> extras_;
   QMap<QString, QStringList> namesBySource_;
-  mutable std::unordered_map<std::string, gapneedle::FastaMap> fastaCache_;
+  mutable std::unordered_map<std::string, std::shared_ptr<gapneedle::FastaIndexedReader>> fastaIndexCache_;
   int nextExtraId_{1};
+  bool checkRunning_{false};
+  bool externalBusy_{false};
+  QString externalBusyReason_;
 };

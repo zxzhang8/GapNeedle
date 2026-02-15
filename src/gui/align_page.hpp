@@ -18,6 +18,7 @@ class AlignPage : public QWidget {
  public:
   explicit AlignPage(gapneedle::GapNeedleFacade* facade, QWidget* parent = nullptr);
   bool isAlignmentRunning() const { return alignRunning_; }
+  void setExternalBusy(bool busy, const QString& reason = QString());
 
  signals:
   void alignmentStarted(const QString& targetSeq, const QString& querySeq);
@@ -55,6 +56,8 @@ class AlignPage : public QWidget {
   QTextEdit* log_{nullptr};
   QPushButton* runBtn_{nullptr};
   bool alignRunning_{false};
+  bool externalBusy_{false};
+  QString externalBusyReason_;
   QHash<QString, QStringList> fastaNamesCache_;
   int targetLoadToken_{0};
   int queryLoadToken_{0};
