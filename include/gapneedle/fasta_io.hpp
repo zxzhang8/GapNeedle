@@ -10,6 +10,7 @@ using FastaMap = std::unordered_map<std::string, std::string>;
 
 FastaMap readFasta(const std::string& path);
 FastaMap readFastaSelected(const std::string& path, const std::vector<std::string>& names);
+std::vector<std::string> readFastaNames(const std::string& path);
 void writeFasta(const std::string& path, const FastaMap& records);
 std::string reverseComplement(const std::string& seq);
 

@@ -42,7 +42,11 @@ AlignmentResult Minimap2Aligner::align(const AlignmentRequest& request) const {
   const std::string pafPath = request.outputPafPath.empty() ? defaultPafPath(request) : request.outputPafPath;
 
   if (request.reuseExisting && std::filesystem::exists(pafPath)) {
-    return AlignmentResult{pafPath, true, {"reused existing paf"}};
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(pafPath, ec);
+    if (!ec && sz > 0) {
+      return AlignmentResult{pafPath, true, {"reused existing paf"}};
+    }
   }
 
   gn_mm2_request cReq{};

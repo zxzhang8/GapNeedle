@@ -11,12 +11,16 @@ class FastaSearchPage;
 class QLabel;
 class QListWidget;
 class QStackedWidget;
+class QCloseEvent;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
 
  public:
   explicit MainWindow(QWidget* parent = nullptr);
+
+ protected:
+  void closeEvent(QCloseEvent* event) override;
 
  private slots:
   void onNavChanged(int row);

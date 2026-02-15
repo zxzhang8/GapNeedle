@@ -7,6 +7,8 @@
 #include "ui_components.hpp"
 
 #include <QFrame>
+#include <QCloseEvent>
+#include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
@@ -15,6 +17,8 @@
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <cstdlib>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("GapNeedle Qt6");
@@ -88,6 +92,7 @@ void MainWindow::setupUi() {
   setCentralWidget(central);
 
   statusIcon_ = new QLabel("●", this);
+  statusIcon_->setObjectName("statusDot");
   statusIcon_->setFixedWidth(18);
   statusIcon_->setAlignment(Qt::AlignCenter);
   statusBar()->addPermanentWidget(statusIcon_);
@@ -96,6 +101,14 @@ void MainWindow::setupUi() {
 
 void MainWindow::setupConnections() {
   connect(navList_, &QListWidget::currentRowChanged, this, &MainWindow::onNavChanged);
+
+  connect(alignPage_,
+          &AlignPage::alignmentStarted,
+          this,
+          [this](const QString& targetSeq, const QString& querySeq) {
+            setStatusIcon("running", QString("Running alignment: %1 <- %2").arg(targetSeq, querySeq));
+            statusBar()->showMessage(QString("Running alignment: %1 <- %2").arg(targetSeq, querySeq));
+          });
 
   connect(alignPage_,
           &AlignPage::alignmentReady,
@@ -108,8 +121,14 @@ void MainWindow::setupConnections() {
             pafViewerPage_->setContext(pafPath, targetSeq, querySeq, true);
             manualPage_->setAlignmentContext(targetFasta, queryFasta, targetSeq, querySeq, pafPath);
             setStatusIcon("success", QString("Alignment ready: %1").arg(pafPath));
+            statusBar()->showMessage(QString("Alignment ready: %1").arg(pafPath));
             gapneedle::ui::showToast(this, "Alignment completed and context synced", "success");
           });
+
+  connect(alignPage_, &AlignPage::alignmentFailed, this, [this](const QString& errorMessage) {
+    setStatusIcon("error", errorMessage);
+    statusBar()->showMessage(QString("Alignment failed: %1").arg(errorMessage));
+  });
 }
 
 void MainWindow::onNavChanged(int row) {
@@ -149,4 +168,14 @@ void MainWindow::setStatusIcon(const QString& level, const QString& tooltip) {
 
   statusIcon_->setStyleSheet(QString("color:%1; font-size:14px;").arg(color));
   statusIcon_->setToolTip(tooltip);
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  if (alignPage_ && alignPage_->isAlignmentRunning()) {
+    statusBar()->showMessage("Alignment is still running. Forcing full shutdown...");
+    QCoreApplication::processEvents();
+    event->accept();
+    std::exit(0);
+  }
+  QMainWindow::closeEvent(event);
 }

@@ -168,6 +168,21 @@ QStatusBar {
   background: %3;
   border-top: 1px solid %4;
 }
+QStatusBar::item {
+  border: 0;
+  background: transparent;
+}
+QStatusBar QLabel {
+  background: transparent;
+}
+QLabel#statusDot {
+  background: transparent;
+}
+QStatusBar QSizeGrip {
+  background: %3;
+  width: 12px;
+  height: 12px;
+}
 QHeaderView::section {
   background: #F2F2F7;
   border: 0;
@@ -218,6 +233,28 @@ QTableWidget#recordTable QScrollBar::add-line:horizontal,
 QTableWidget#recordTable QScrollBar::sub-line:horizontal,
 QTableWidget#recordTable QScrollBar::add-page:horizontal,
 QTableWidget#recordTable QScrollBar::sub-page:horizontal {
+  width: 0px;
+  background: transparent;
+}
+QTextEdit#alignLog QScrollBar:horizontal {
+  background: #F2F2F7;
+  height: 12px;
+  margin: 2px 8px 4px 8px;
+  border: 0;
+  border-radius: 6px;
+}
+QTextEdit#alignLog QScrollBar::handle:horizontal {
+  background: #C3C7CE;
+  min-width: 36px;
+  border-radius: 6px;
+}
+QTextEdit#alignLog QScrollBar::handle:horizontal:hover {
+  background: #A8AFB9;
+}
+QTextEdit#alignLog QScrollBar::add-line:horizontal,
+QTextEdit#alignLog QScrollBar::sub-line:horizontal,
+QTextEdit#alignLog QScrollBar::add-page:horizontal,
+QTextEdit#alignLog QScrollBar::sub-page:horizontal {
   width: 0px;
   background: transparent;
 }

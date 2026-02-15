@@ -11,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
@@ -180,6 +181,7 @@ void PafViewerPage::onApplyFilterSort() {
 }
 
 void PafViewerPage::populateTable(const std::vector<gapneedle::AlignmentRecord>& records) {
+  const QLocale locale = QLocale::system();
   std::vector<bool> overlaps(records.size(), false);
   for (int i = 0; i < static_cast<int>(records.size()); ++i) {
     for (int j = 0; j < static_cast<int>(records.size()); ++j) {
@@ -198,16 +200,16 @@ void PafViewerPage::populateTable(const std::vector<gapneedle::AlignmentRecord>&
     const auto& rec = records[static_cast<std::size_t>(row)];
     QStringList cols = {
         QString::fromStdString(rec.qName),
-        QString::number(rec.qLen),
-        QString::number(rec.qStart),
-        QString::number(rec.qEnd),
+        locale.toString(rec.qLen),
+        locale.toString(rec.qStart),
+        locale.toString(rec.qEnd),
         QString(QChar(rec.strand)),
         QString::fromStdString(rec.tName),
-        QString::number(rec.tLen),
-        QString::number(rec.tStart),
-        QString::number(rec.tEnd),
-        QString::number(rec.matches),
-        QString::number(rec.alnLen),
+        locale.toString(rec.tLen),
+        locale.toString(rec.tStart),
+        locale.toString(rec.tEnd),
+        locale.toString(rec.matches),
+        locale.toString(rec.alnLen),
         QString::number(rec.mapq),
         overlaps[static_cast<std::size_t>(row)] ? "Yes" : "No"};
 

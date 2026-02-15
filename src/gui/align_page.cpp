@@ -1,5 +1,7 @@
 #include "align_page.hpp"
 
+#include "gapneedle/fasta_io.hpp"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCompleter>
@@ -7,6 +9,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QFormLayout>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -16,10 +19,13 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
+#include <QTextCharFormat>
+#include <QTextCursor>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
-#include <fstream>
+#include <filesystem>
 
 namespace {
 
@@ -41,7 +47,64 @@ QComboBox* createSearchableCombo(QWidget* parent) {
   return combo;
 }
 
+QString logLevelForKey(const QString& key) {
+  if (key == "Config") return "config";
+  if (key == "Cache hit" || key == "Cache miss") return "cache";
+  if (key == "PAF" || key == "Status") return "success";
+  if (key == "Error") return "error";
+  if (key == "Running" || key == "Load") return "running";
+  return "info";
+}
+
+QTextCharFormat badgeFormatForLevel(const QString& level) {
+  QColor bg("#E9EAEE");
+  QColor fg("#4A4A4A");
+  if (level == "config") {
+    bg = QColor("#E8F0FE");
+    fg = QColor("#2557D6");
+  } else if (level == "cache") {
+    bg = QColor("#FFF4E5");
+    fg = QColor("#A15A00");
+  } else if (level == "running") {
+    bg = QColor("#EAF2FF");
+    fg = QColor("#3367D6");
+  } else if (level == "success") {
+    bg = QColor("#E8F7ED");
+    fg = QColor("#1E7A3D");
+  } else if (level == "error") {
+    bg = QColor("#FDEBEC");
+    fg = QColor("#B3261E");
+  }
+  QTextCharFormat fmt;
+  fmt.setForeground(fg);
+  fmt.setBackground(bg);
+  fmt.setFontWeight(QFont::DemiBold);
+  return fmt;
+}
+
+bool splitLogLine(const QString& text, QString* key, QString* body) {
+  const int p = text.indexOf(':');
+  if (p <= 0) {
+    return false;
+  }
+  *key = text.left(p).trimmed();
+  *body = text.mid(p + 1).trimmed();
+  return !key->isEmpty();
+}
+
 }  // namespace
+
+struct AlignTaskResult {
+  gapneedle::AlignmentResult result;
+  QString configLine;
+  QString cacheLine;
+  QString error;
+};
+
+struct FastaNameLoadResult {
+  QStringList names;
+  QString error;
+};
 
 AlignPage::AlignPage(gapneedle::GapNeedleFacade* facade, QWidget* parent)
     : QWidget(parent), facade_(facade) {
@@ -122,15 +185,16 @@ AlignPage::AlignPage(gapneedle::GapNeedleFacade* facade, QWidget* parent)
   layout->addLayout(form);
 
   auto* btnRow = new QHBoxLayout();
-  auto* runBtn = new QPushButton("Run alignment", card);
-  runBtn->setObjectName("primaryButton");
+  runBtn_ = new QPushButton("Run alignment", card);
+  runBtn_->setObjectName("primaryButton");
   auto* clearBtn = new QPushButton("Clear log", card);
-  btnRow->addWidget(runBtn);
+  btnRow->addWidget(runBtn_);
   btnRow->addWidget(clearBtn);
   btnRow->addStretch(1);
   layout->addLayout(btnRow);
 
   log_ = new QTextEdit(card);
+  log_->setObjectName("alignLog");
   log_->setReadOnly(true);
   log_->setMinimumHeight(260);
   layout->addWidget(log_, 1);
@@ -146,11 +210,33 @@ AlignPage::AlignPage(gapneedle::GapNeedleFacade* facade, QWidget* parent)
   connect(presetCombo_, &QComboBox::currentTextChanged, this, [this]() { cachePathView_->setText(computeCachePafPath()); });
   connect(reverseTarget_, &QCheckBox::toggled, this, [this]() { cachePathView_->setText(computeCachePafPath()); });
   connect(reverseQuery_, &QCheckBox::toggled, this, [this]() { cachePathView_->setText(computeCachePafPath()); });
-  connect(runBtn, &QPushButton::clicked, this, &AlignPage::onRunAlign);
+  connect(runBtn_, &QPushButton::clicked, this, &AlignPage::onRunAlign);
   connect(clearBtn, &QPushButton::clicked, log_, &QTextEdit::clear);
 }
 
-void AlignPage::appendLog(const QString& text) { log_->append(text); }
+void AlignPage::appendLog(const QString& text) {
+  QTextCursor c = log_->textCursor();
+  c.movePosition(QTextCursor::End);
+
+  QString key;
+  QString body;
+  if (!splitLogLine(text, &key, &body)) {
+    c.insertText(text + "\n");
+    log_->setTextCursor(c);
+    return;
+  }
+
+  const QString level = logLevelForKey(key);
+  QTextCharFormat badgeFmt = badgeFormatForLevel(level);
+  badgeFmt.setFontPointSize(10.0);
+  c.insertText(" " + key + " ", badgeFmt);
+
+  QTextCharFormat bodyFmt;
+  bodyFmt.setForeground(QColor("#3A3A3C"));
+  bodyFmt.setFontPointSize(10.5);
+  c.insertText(" " + body + "\n", bodyFmt);
+  log_->setTextCursor(c);
+}
 
 void AlignPage::onBrowseTarget() {
   const QString path = QFileDialog::getOpenFileName(this,
@@ -177,28 +263,82 @@ void AlignPage::onBrowseQuery() {
 }
 
 void AlignPage::loadSequenceNames(const QString& fastaPath, QComboBox* combo) {
+  const bool isTarget = combo == targetSeqCombo_;
+  int* tokenPtr = isTarget ? &targetLoadToken_ : &queryLoadToken_;
+  ++(*tokenPtr);
+  const int token = *tokenPtr;
+
   combo->clear();
-  std::ifstream in(fastaPath.toStdString());
-  if (!in) {
+  if (fastaPath.trimmed().isEmpty()) {
+    combo->setEnabled(true);
     return;
   }
 
-  QStringList names;
-  std::string line;
-  while (std::getline(in, line)) {
-    if (!line.empty() && line[0] == '>') {
-      QString name = QString::fromStdString(line.substr(1)).trimmed();
-      const int sp = name.indexOf(' ');
-      if (sp > 0) {
-        name = name.left(sp);
-      }
-      if (!name.isEmpty()) {
-        names.push_back(name);
-      }
-    }
+  const QString key = normalizedPathKey(fastaPath);
+  auto it = fastaNamesCache_.find(key);
+  if (it != fastaNamesCache_.end()) {
+    combo->addItems(it.value());
+    combo->setEnabled(true);
+    return;
   }
-  names.removeDuplicates();
-  combo->addItems(names);
+
+  combo->setEnabled(false);
+  combo->addItem("Loading sequence names...");
+
+  auto* watcher = new QFutureWatcher<FastaNameLoadResult>(this);
+  connect(watcher, &QFutureWatcher<FastaNameLoadResult>::finished, this, [this, watcher, combo, key, isTarget, token]() {
+    watcher->deleteLater();
+    const int currentToken = isTarget ? targetLoadToken_ : queryLoadToken_;
+    if (token != currentToken) {
+      return;
+    }
+
+    FastaNameLoadResult loaded = watcher->result();
+    combo->blockSignals(true);
+    combo->clear();
+    if (!loaded.error.isEmpty()) {
+      combo->setEnabled(true);
+      combo->blockSignals(false);
+      appendLog(QString("Load: failed to load FASTA names: %1").arg(loaded.error));
+      return;
+    }
+
+    fastaNamesCache_.insert(key, loaded.names);
+    combo->addItems(loaded.names);
+    combo->setEnabled(true);
+    combo->blockSignals(false);
+    cachePathView_->setText(computeCachePafPath());
+  });
+
+  const std::string path = fastaPath.toStdString();
+  watcher->setFuture(QtConcurrent::run([path]() {
+    FastaNameLoadResult out;
+    try {
+      const auto names = gapneedle::readFastaNames(path);
+      out.names.reserve(static_cast<qsizetype>(names.size()));
+      for (const auto& n : names) {
+        out.names.push_back(QString::fromStdString(n));
+      }
+    } catch (const std::exception& e) {
+      out.error = QString::fromUtf8(e.what());
+    } catch (...) {
+      out.error = "unknown FASTA read error";
+    }
+    return out;
+  }));
+}
+
+QString AlignPage::normalizedPathKey(const QString& path) const {
+  const QFileInfo fi(path.trimmed());
+  const QString canonical = fi.canonicalFilePath();
+  if (!canonical.isEmpty()) {
+    return canonical;
+  }
+  const QString absolute = fi.absoluteFilePath();
+  if (!absolute.isEmpty()) {
+    return absolute;
+  }
+  return path.trimmed();
 }
 
 void AlignPage::onTargetPathEdited() {
@@ -232,6 +372,10 @@ QString AlignPage::computeCachePafPath() const {
 }
 
 void AlignPage::onRunAlign() {
+  if (alignRunning_) {
+    appendLog("Running: alignment is already in progress.");
+    return;
+  }
   const QString tf = targetFasta_->text().trimmed();
   const QString qf = queryFasta_->text().trimmed();
   const QString ts = targetSeqCombo_->currentText().trimmed();
@@ -247,25 +391,6 @@ void AlignPage::onRunAlign() {
     return;
   }
   cachePathView_->setText(pafPath);
-  QFileInfo pf(pafPath);
-  QDir().mkpath(pf.dir().absolutePath());
-
-  const bool cacheHit = pf.exists();
-  appendLog(QString("Config: target=%1 (%2) | query=%3 (%4) | preset=%5 threads=%6 reverse_target=%7 reverse_query=%8")
-                .arg(ts)
-                .arg(tf)
-                .arg(qs)
-                .arg(qf)
-                .arg(presetCombo_->currentText())
-                .arg(threads_->value())
-                .arg(reverseTarget_->isChecked() ? "true" : "false")
-                .arg(reverseQuery_->isChecked() ? "true" : "false"));
-
-  if (cacheHit) {
-    appendLog(QString("Cache hit: %1 (will reuse if aligner supports reuse)").arg(pafPath));
-  } else {
-    appendLog(QString("Cache miss: %1").arg(pafPath));
-  }
 
   gapneedle::AlignmentRequest req;
   req.targetFasta = tf.toStdString();
@@ -279,13 +404,66 @@ void AlignPage::onRunAlign() {
   req.reverseQuery = reverseQuery_->isChecked();
   req.reuseExisting = true;
 
-  try {
-    const auto result = facade_->align(req);
-    appendLog(QString("PAF: %1").arg(QString::fromStdString(result.pafPath)));
-    appendLog(QString("Status: %1").arg(result.skipped ? "reused cache" : "newly generated"));
-    emit alignmentReady(QString::fromStdString(result.pafPath), ts, qs, tf, qf);
-  } catch (const std::exception& e) {
-    appendLog(QString("Error: %1").arg(e.what()));
-    QMessageBox::critical(this, "Alignment failed", e.what());
-  }
+  alignRunning_ = true;
+  runBtn_->setEnabled(false);
+  appendLog("Running: alignment started in background...");
+  emit alignmentStarted(ts, qs);
+
+  auto* watcher = new QFutureWatcher<AlignTaskResult>(this);
+  connect(watcher, &QFutureWatcher<AlignTaskResult>::finished, this, [this, watcher, ts, qs, tf, qf]() {
+    const AlignTaskResult task = watcher->result();
+    watcher->deleteLater();
+    alignRunning_ = false;
+    runBtn_->setEnabled(true);
+    if (!task.configLine.isEmpty()) appendLog(task.configLine);
+    if (!task.cacheLine.isEmpty()) appendLog(task.cacheLine);
+    if (!task.error.isEmpty()) {
+      appendLog(QString("Error: %1").arg(task.error));
+      QMessageBox::critical(this, "Alignment failed", task.error);
+      emit alignmentFailed(task.error);
+      return;
+    }
+    appendLog(QString("PAF: %1").arg(QString::fromStdString(task.result.pafPath)));
+    appendLog(QString("Status: %1").arg(task.result.skipped ? "reused cache" : "newly generated"));
+    emit alignmentReady(QString::fromStdString(task.result.pafPath), ts, qs, tf, qf);
+  });
+
+  watcher->setFuture(QtConcurrent::run([facade = facade_, req]() {
+    AlignTaskResult out;
+    try {
+      const std::filesystem::path pafPath(req.outputPafPath);
+      if (pafPath.has_parent_path()) {
+        std::error_code ec;
+        std::filesystem::create_directories(pafPath.parent_path(), ec);
+        if (ec) {
+          out.error = QString("failed to create output directory: %1").arg(QString::fromStdString(ec.message()));
+          return out;
+        }
+      }
+
+      const bool cacheHit = std::filesystem::exists(pafPath);
+      out.configLine = QString("Config: target=%1 (%2) | query=%3 (%4) | preset=%5 threads=%6 reverse_target=%7 reverse_query=%8")
+                           .arg(QString::fromStdString(req.targetSeq))
+                           .arg(QString::fromStdString(req.targetFasta))
+                           .arg(QString::fromStdString(req.querySeq))
+                           .arg(QString::fromStdString(req.queryFasta))
+                           .arg(QString::fromStdString(req.preset))
+                           .arg(req.threads)
+                           .arg(req.reverseTarget ? "true" : "false")
+                           .arg(req.reverseQuery ? "true" : "false");
+      if (cacheHit) {
+        out.cacheLine = QString("Cache hit: %1 (will reuse if aligner supports reuse)")
+                            .arg(QString::fromStdString(req.outputPafPath));
+      } else {
+        out.cacheLine = QString("Cache miss: %1").arg(QString::fromStdString(req.outputPafPath));
+      }
+
+      out.result = facade->align(req);
+    } catch (const std::exception& e) {
+      out.error = QString::fromUtf8(e.what());
+    } catch (...) {
+      out.error = "unknown error";
+    }
+    return out;
+  }));
 }

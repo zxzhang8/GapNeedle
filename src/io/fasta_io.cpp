@@ -81,6 +81,30 @@ FastaMap readFastaSelected(const std::string& path, const std::vector<std::strin
   return out;
 }
 
+std::vector<std::string> readFastaNames(const std::string& path) {
+  std::ifstream in(path);
+  if (!in) {
+    throw std::runtime_error("Failed to open FASTA: " + path);
+  }
+
+  std::vector<std::string> names;
+  std::unordered_set<std::string> seen;
+  std::string line;
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] != '>') {
+      continue;
+    }
+    std::string name = normalizeName(trim(line.substr(1)));
+    if (name.empty()) {
+      continue;
+    }
+    if (seen.insert(name).second) {
+      names.push_back(std::move(name));
+    }
+  }
+  return names;
+}
+
 void writeFasta(const std::string& path, const FastaMap& records) {
   std::ofstream out(path);
   if (!out) {

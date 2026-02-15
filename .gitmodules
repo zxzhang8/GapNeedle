@@ -1,0 +1,3 @@
+[submodule "third_party/minimap2"]
+	path = third_party/minimap2
+	url = https://github.com/lh3/minimap2.git

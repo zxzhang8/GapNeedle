@@ -11,7 +11,7 @@ option(GAPNEEDLE_BUILD_TESTS "Build tests" ON)
 option(GAPNEEDLE_USE_MINIMAP2 "Enable minimap2 integration" ON)
 
 if(GAPNEEDLE_BUILD_GUI)
-  find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+  find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui Concurrent)
 endif()
 
 set(GAPNEEDLE_PUBLIC_HEADERS
@@ -36,7 +36,7 @@ set(GAPNEEDLE_CORE_SOURCES
 
 if(GAPNEEDLE_USE_MINIMAP2)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/minimap2/minimap.h)
-    add_subdirectory(third_party/minimap2)
+    include(cmake/minimap2.cmake)
     add_library(gapneedle_minimap2_bridge STATIC
       src/minimap2_bridge/minimap2_bridge.c
       src/minimap2_bridge/minimap2_aligner.cpp
@@ -88,7 +88,7 @@ if(GAPNEEDLE_BUILD_GUI)
   )
   target_include_directories(gapneedle_gui PRIVATE src/gui)
   set_target_properties(gapneedle_gui PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
-  target_link_libraries(gapneedle_gui PRIVATE gapneedle_core Qt6::Core Qt6::Gui Qt6::Widgets)
+  target_link_libraries(gapneedle_gui PRIVATE gapneedle_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent)
 endif()
 
 if(GAPNEEDLE_BUILD_TESTS)
