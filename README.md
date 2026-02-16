@@ -3,7 +3,7 @@ GapNeedle (C++/Qt)
 
 English README · [中文文档](README_cn.md)
 
-![GapNeedle Logo](img/logo.svg)
+<img src="img/logo.svg" alt="GapNeedle Logo" width="180" />
 
 GapNeedle is a desktop-first gap-filling tool implemented in C++17 with Qt6 Widgets.
 It focuses on efficient single-sequence workflows: **align -> inspect -> stitch**.
