@@ -21,7 +21,7 @@
 #include <cstdlib>
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-  setWindowTitle("GapNeedle Qt6");
+  setWindowTitle("GapNeedle");
   resize(1500, 940);
   setupUi();
   setupConnections();

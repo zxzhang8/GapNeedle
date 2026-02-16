@@ -214,48 +214,56 @@ QListWidget#navList::item:focus {
   border: 0;
   outline: 0;
 }
-QTableWidget#recordTable QScrollBar:horizontal {
+QAbstractScrollArea QScrollBar:horizontal {
   background: #F2F2F7;
   height: 12px;
   margin: 2px 8px 4px 8px;
   border: 0;
   border-radius: 6px;
 }
-QTableWidget#recordTable QScrollBar::handle:horizontal {
+QAbstractScrollArea QScrollBar::handle:horizontal {
   background: #C3C7CE;
   min-width: 36px;
   border-radius: 6px;
 }
-QTableWidget#recordTable QScrollBar::handle:horizontal:hover {
+QAbstractScrollArea QScrollBar::handle:horizontal:hover {
   background: #A8AFB9;
 }
-QTableWidget#recordTable QScrollBar::add-line:horizontal,
-QTableWidget#recordTable QScrollBar::sub-line:horizontal,
-QTableWidget#recordTable QScrollBar::add-page:horizontal,
-QTableWidget#recordTable QScrollBar::sub-page:horizontal {
+QAbstractScrollArea QScrollBar::add-line:horizontal,
+QAbstractScrollArea QScrollBar::sub-line:horizontal,
+QAbstractScrollArea QScrollBar::add-page:horizontal,
+QAbstractScrollArea QScrollBar::sub-page:horizontal {
   width: 0px;
   background: transparent;
 }
-QTextEdit#alignLog QScrollBar:horizontal {
+QAbstractScrollArea QScrollBar:vertical {
   background: #F2F2F7;
-  height: 12px;
-  margin: 2px 8px 4px 8px;
+  width: 12px;
+  margin: 8px 2px 8px 4px;
   border: 0;
   border-radius: 6px;
 }
-QTextEdit#alignLog QScrollBar::handle:horizontal {
+QAbstractScrollArea QScrollBar::handle:vertical {
   background: #C3C7CE;
-  min-width: 36px;
+  min-height: 36px;
   border-radius: 6px;
 }
-QTextEdit#alignLog QScrollBar::handle:horizontal:hover {
+QAbstractScrollArea QScrollBar::handle:vertical:hover {
   background: #A8AFB9;
 }
-QTextEdit#alignLog QScrollBar::add-line:horizontal,
-QTextEdit#alignLog QScrollBar::sub-line:horizontal,
-QTextEdit#alignLog QScrollBar::add-page:horizontal,
-QTextEdit#alignLog QScrollBar::sub-page:horizontal {
+QAbstractScrollArea QScrollBar::add-line:vertical,
+QAbstractScrollArea QScrollBar::sub-line:vertical,
+QAbstractScrollArea QScrollBar::add-page:vertical,
+QAbstractScrollArea QScrollBar::sub-page:vertical {
+  height: 0px;
+  background: transparent;
+}
+QAbstractScrollArea QScrollBar::up-arrow:vertical,
+QAbstractScrollArea QScrollBar::down-arrow:vertical,
+QAbstractScrollArea QScrollBar::left-arrow:horizontal,
+QAbstractScrollArea QScrollBar::right-arrow:horizontal {
   width: 0px;
+  height: 0px;
   background: transparent;
 }
 )")
