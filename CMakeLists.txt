@@ -86,6 +86,9 @@ if(GAPNEEDLE_BUILD_GUI)
     src/gui/manual_stitch_page.cpp
     src/gui/fasta_search_page.cpp
   )
+  if(WIN32)
+    target_sources(gapneedle_gui PRIVATE src/gui/resources/appicon.rc)
+  endif()
   target_include_directories(gapneedle_gui PRIVATE src/gui)
   set_target_properties(gapneedle_gui PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
   target_link_libraries(gapneedle_gui PRIVATE gapneedle_core Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Concurrent)

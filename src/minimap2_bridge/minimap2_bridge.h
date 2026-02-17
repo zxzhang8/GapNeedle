@@ -9,6 +9,8 @@ typedef struct {
   const char* query_fasta;
   const char* target_seq;
   const char* query_seq;
+  int reverse_target;
+  int reverse_query;
   const char* preset;
   int threads;
   const char* output_paf;

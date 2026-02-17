@@ -27,6 +27,54 @@
 #include <algorithm>
 #include <random>
 
+namespace {
+
+QString escaped(const std::string& s) {
+  return QString::fromStdString(s).toHtmlEscaped();
+}
+
+double pct(int value, int total) {
+  if (total <= 0) return 0.0;
+  const double raw = (100.0 * static_cast<double>(value)) / static_cast<double>(total);
+  return std::clamp(raw, 0.0, 100.0);
+}
+
+QString statusBadge(const QString& text, const QString& tone) {
+  return QString("<span class='badge %1'>%2</span>").arg(tone, text.toHtmlEscaped());
+}
+
+QString axisBar(const QString& title,
+                int start,
+                int end,
+                int total,
+                const QString& markerLabel,
+                std::optional<int> markerPos,
+                const QString& fillColor) {
+  const double leftPct = pct(start, total);
+  const double widthPct = std::max(0.0, pct(end, total) - leftPct);
+  const double markerPct = markerPos.has_value() ? pct(markerPos.value(), total) : -1.0;
+  QString html;
+  html += "<div class='axis-wrap'>";
+  html += QString("<div class='axis-title'>%1</div>").arg(title.toHtmlEscaped());
+  html += "<div class='track'>";
+  html += QString("<div class='range' style='left:%1%%; width:%2%%; background:%3;'></div>")
+              .arg(leftPct, 0, 'f', 2)
+              .arg(widthPct, 0, 'f', 2)
+              .arg(fillColor);
+  if (markerPos.has_value()) {
+    html += QString("<div class='marker' style='left:%1%%;'></div>").arg(markerPct, 0, 'f', 2);
+  }
+  html += "</div>";
+  html += QString("<div class='axis-meta'>%1-%2 / %3</div>").arg(start).arg(end).arg(total);
+  if (markerPos.has_value()) {
+    html += QString("<div class='marker-meta'>%1: %2</div>").arg(markerLabel.toHtmlEscaped()).arg(markerPos.value());
+  }
+  html += "</div>";
+  return html;
+}
+
+}  // namespace
+
 PafViewerPage::PafViewerPage(QWidget* parent) : QWidget(parent) {
   auto* outer = new QVBoxLayout(this);
   outer->setContentsMargins(12, 12, 12, 12);
@@ -116,6 +164,7 @@ PafViewerPage::PafViewerPage(QWidget* parent) : QWidget(parent) {
   auto* detailLayout = new QVBoxLayout(detailPage);
   mapDetail_ = new QTextEdit(detailPage);
   mapDetail_->setReadOnly(true);
+  mapDetail_->setStyleSheet("QTextEdit{background:#FFFFFF;color:#1D1D1F;border:1px solid #E5E5EA;border-radius:10px;}");
   detailLayout->addWidget(mapDetail_, 1);
   tabs_->addTab(detailPage, "Map details");
 
@@ -269,40 +318,116 @@ int PafViewerPage::countValue(const std::unordered_map<char, int>& m, char key) 
 }
 
 QString PafViewerPage::formatMappingDetail(const gapneedle::AlignmentRecord& rec, const gapneedle::MappingResult& r) const {
-  QStringList lines;
-  lines << QString("Record: %1 -> %2 (strand %3)").arg(QString::fromStdString(rec.qName), QString::fromStdString(rec.tName), QString(QChar(rec.strand)));
-  lines << QString("Query index: %1").arg(r.qPos);
-  if (r.qPosOriented.has_value() && r.qPosOriented.value() != r.qPos) {
-    lines << QString("Oriented query index: %1").arg(r.qPosOriented.value());
-  }
-  lines << QString("Query span: %1 - %2").arg(rec.qStart).arg(rec.qEnd);
-  lines << QString("Target span: %1 - %2").arg(rec.tStart).arg(rec.tEnd);
-  lines << "";
-  lines << QString("Reason: %1").arg(QString::fromStdString(r.reason));
+  const int matchesTotal = countValue(r.countsTotal, 'M') + countValue(r.countsTotal, '=') + countValue(r.countsTotal, 'X');
+  const int insertionTotal = countValue(r.countsTotal, 'I');
+  const int deletionTotal = countValue(r.countsTotal, 'D');
+  const int skipTotal = countValue(r.countsTotal, 'N');
+  const int softTotal = countValue(r.countsTotal, 'S');
+  const int hardTotal = countValue(r.countsTotal, 'H');
+  const int padTotal = countValue(r.countsTotal, 'P');
+  const int indelBefore = countValue(r.countsBefore, 'I') + countValue(r.countsBefore, 'D');
+
+  QString reasonText = QString::fromStdString(r.reason);
+  QString reasonTone = "warn";
+  if (r.reason == "ok") reasonTone = "ok";
+  else if (r.reason == "missing_cigar" || r.reason == "bad_cigar") reasonTone = "error";
+
+  QString opText = "N/A";
   if (r.op != 0) {
-    lines << QString("Operation: %1 (len %2, offset %3)").arg(QChar(r.op)).arg(r.opLen).arg(r.opOffset);
+    opText = QString("%1 (%2 bp, +%3)").arg(QChar(r.op)).arg(r.opLen).arg(r.opOffset);
   }
+
+  QString targetValue = "N/A";
   if (r.tPos.has_value()) {
-    lines << QString("Mapped target index: %1").arg(r.tPos.value());
+    targetValue = QString::number(r.tPos.value());
   }
-  lines << "";
-  lines << "Consumed before this index:";
-  lines << QString("  Query-consuming: %1").arg(r.qConsumedBefore);
-  lines << QString("  Target-consuming: %1").arg(r.tConsumedBefore);
-  lines << "";
-  lines << "Insertions / deletions before this index:";
-  lines << QString("  Insertions (I): %1").arg(countValue(r.countsBefore, 'I'));
-  lines << QString("  Deletions (D): %1").arg(countValue(r.countsBefore, 'D'));
-  lines << "";
-  lines << "CIGAR totals in this record:";
-  lines << QString("  Matches (M/= /X): %1").arg(countValue(r.countsTotal, 'M') + countValue(r.countsTotal, '=') + countValue(r.countsTotal, 'X'));
-  lines << QString("  Insertions (I): %1").arg(countValue(r.countsTotal, 'I'));
-  lines << QString("  Deletions (D): %1").arg(countValue(r.countsTotal, 'D'));
-  lines << QString("  Skips (N): %1").arg(countValue(r.countsTotal, 'N'));
-  lines << QString("  Soft clips (S): %1").arg(countValue(r.countsTotal, 'S'));
-  lines << QString("  Hard clips (H): %1").arg(countValue(r.countsTotal, 'H'));
-  lines << QString("  Pads (P): %1").arg(countValue(r.countsTotal, 'P'));
-  return lines.join('\n');
+
+  const QString queryHint = (r.qPosOriented.has_value() && r.qPosOriented.value() != r.qPos)
+                                ? QString("oriented: %1").arg(r.qPosOriented.value())
+                                : QString("same orientation");
+
+  QString html;
+  html += R"(
+<html><head><style>
+body{font-family:"SF Pro Text","PingFang SC","Segoe UI",sans-serif;background:#FFFFFF !important;color:#1D1D1F !important;margin:0;padding:10px;}
+.panel{background:#FFFFFF !important;border:1px solid #E5E5EA;border-radius:12px;padding:14px 16px;}
+.title{font-size:16px;font-weight:700;margin:0 0 6px 0;}
+.sub{font-size:12px;color:#6E6E73;margin-bottom:10px;}
+.badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;}
+.badge.ok{background:#E9F7EF;color:#1E7A3D;border:1px solid #CBEAD6;}
+.badge.warn{background:#FFF5E6;color:#A15A00;border:1px solid #F1D5A8;}
+.badge.error{background:#FDEBEC;color:#B3261E;border:1px solid #F4C7CB;}
+.section{margin-top:12px;padding:10px;background:#FFFFFF !important;border:1px solid #ECECF0;border-radius:10px;}
+.divider{height:1px;background:#4A4A4F;margin:12px 2px 0 2px;opacity:0.85;}
+.section-title{font-size:17px;font-weight:800;margin-bottom:9px;letter-spacing:0.2px;}
+.section-title.overview{color:#1F5FBF;}
+.section-title.coords{color:#0E766E;}
+.section-title.spans{color:#7A4A0A;}
+.section-title.cigar{color:#6C2E9E;}
+.kv{width:100%;border-collapse:collapse;background:#FFFFFF !important;border:1px solid #ECECF0;border-radius:8px;overflow:hidden;}
+.kv tr{background:#FFFFFF !important;}
+.kv td{font-size:12px;padding:7px 8px;border-bottom:1px solid #F0F0F2;vertical-align:top;background:#FFFFFF !important;color:#1D1D1F !important;}
+.kv tr:last-child td{border-bottom:none;}
+.kv td:first-child{width:170px;color:#6E6E73 !important;background:#F8F8FA !important;}
+.axis-wrap{margin-top:8px;background:#FFFFFF !important;border:1px solid #ECECF0;border-radius:8px;padding:8px;}
+.axis-title{font-size:12px;font-weight:650;color:#1D1D1F;margin-bottom:6px;}
+.track{position:relative;height:10px;border-radius:999px;background:#ECECF1 !important;overflow:hidden;}
+.range{position:absolute;top:0;height:100%;border-radius:999px;}
+.marker{position:absolute;top:-3px;width:2px;height:16px;background:#111111;border-radius:2px;}
+.axis-meta{font-size:11px;color:#6E6E73;margin-top:6px;}
+.marker-meta{font-size:11px;color:#3A3A3C;margin-top:2px;}
+</style></head><body>
+)";
+
+  html += "<div class='panel'>";
+  html += QString("<div class='title'>%1 → %2 <span style='font-size:12px;color:#6E6E73;'>(strand %3)</span></div>")
+              .arg(escaped(rec.qName), escaped(rec.tName), QString(QChar(rec.strand)).toHtmlEscaped());
+  html += QString("<div class='sub'>%1 &nbsp; reason=%2</div>").arg(statusBadge(reasonText, reasonTone), reasonText.toHtmlEscaped());
+
+  html += "<div class='section'><div class='section-title overview'>Overview</div>";
+  html += "<table class='kv'><tbody>";
+  html += QString("<tr><td>Query index</td><td><b>%1</b> <span style='color:#6E6E73;'>%2</span></td></tr>")
+              .arg(r.qPos)
+              .arg(queryHint.toHtmlEscaped());
+  html += QString("<tr><td>Mapped target index</td><td><b>%1</b></td></tr>").arg(targetValue.toHtmlEscaped());
+  html += QString("<tr><td>Current CIGAR operation</td><td><b>%1</b></td></tr>").arg(opText.toHtmlEscaped());
+  html += QString("<tr><td>Consumed before index</td><td>query=%1, target=%2, indel=%3</td></tr>")
+              .arg(r.qConsumedBefore)
+              .arg(r.tConsumedBefore)
+              .arg(indelBefore);
+  html += "</tbody></table></div>";
+
+  html += "<div class='divider'></div>";
+  html += "<div class='section'><div class='section-title coords'>Coordinates</div>";
+  html += axisBar("Query axis", rec.qStart, rec.qEnd, rec.qLen, "selected query", r.qPosOriented, "#64A7FF");
+  html += axisBar("Target axis", rec.tStart, rec.tEnd, rec.tLen, "mapped target", r.tPos, "#72D8B2");
+  html += "</div>";
+
+  html += "<div class='divider'></div>";
+  html += "<div class='section'><div class='section-title spans'>Record Spans</div>";
+  html += "<table class='kv'><tbody>";
+  html += QString("<tr><td>Query span</td><td>%1 - %2 (len %3)</td></tr>").arg(rec.qStart).arg(rec.qEnd).arg(rec.qLen);
+  html += QString("<tr><td>Target span</td><td>%1 - %2 (len %3)</td></tr>").arg(rec.tStart).arg(rec.tEnd).arg(rec.tLen);
+  html += QString("<tr><td>Alignment quality</td><td>matches=%1, aln_len=%2, mapq=%3</td></tr>")
+              .arg(rec.matches)
+              .arg(rec.alnLen)
+              .arg(rec.mapq);
+  html += "</tbody></table></div>";
+
+  html += "<div class='divider'></div>";
+  html += "<div class='section'><div class='section-title cigar'>CIGAR Summary</div>";
+  html += "<table class='kv'><tbody>";
+  html += QString("<tr><td>Matches (M/= /X)</td><td>%1</td></tr>").arg(matchesTotal);
+  html += QString("<tr><td>Insertions (I)</td><td>%1</td></tr>").arg(insertionTotal);
+  html += QString("<tr><td>Deletions (D)</td><td>%1</td></tr>").arg(deletionTotal);
+  html += QString("<tr><td>Skips (N)</td><td>%1</td></tr>").arg(skipTotal);
+  html += QString("<tr><td>Soft clips (S)</td><td>%1</td></tr>").arg(softTotal);
+  html += QString("<tr><td>Hard clips (H)</td><td>%1</td></tr>").arg(hardTotal);
+  html += QString("<tr><td>Pads (P)</td><td>%1</td></tr>").arg(padTotal);
+  html += "</tbody></table></div>";
+
+  html += "</div></body></html>";
+  return html;
 }
 
 void PafViewerPage::onMapQueryPosition() {
@@ -336,7 +461,7 @@ void PafViewerPage::onMapQueryPosition() {
     QApplication::clipboard()->setText(QString::number(result.tPos.value()));
   }
 
-  mapDetail_->setPlainText(formatMappingDetail(rec, result));
+  mapDetail_->setHtml(formatMappingDetail(rec, result));
   tabs_->setCurrentIndex(1);
 }
 

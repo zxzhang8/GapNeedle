@@ -21,6 +21,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QAbstractSpinBox>
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QVBoxLayout>
@@ -234,7 +235,15 @@ ManualStitchPage::ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* 
   root->addLayout(footer);
 
   connect(checkBtn_, &QPushButton::clicked, this, &ManualStitchPage::onCheckBreakpoints);
-  connect(contextSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { refreshPreview(); });
+  connect(contextSpin_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+    materializedContextBp_ = -1;
+    refreshPreview();
+  });
+  connect(contextSpin_, &QAbstractSpinBox::editingFinished, this, [this]() {
+    contextSpin_->interpretText();
+    materializedContextBp_ = -1;
+    refreshPreview();
+  });
   connect(exportBtn, &QPushButton::clicked, this, &ManualStitchPage::onExport);
   connect(upBtn, &QPushButton::clicked, this, &ManualStitchPage::onMoveSegmentUp);
   connect(downBtn, &QPushButton::clicked, this, &ManualStitchPage::onMoveSegmentDown);
@@ -476,6 +485,7 @@ void ManualStitchPage::onSegmentSelectionChanged() {
 }
 
 void ManualStitchPage::onCheckBreakpoints() {
+  contextSpin_->interpretText();
   if (externalBusy_) {
     appendResult(QString("Check blocked: %1")
                      .arg(externalBusyReason_.isEmpty() ? "another task is running" : externalBusyReason_));
@@ -505,7 +515,7 @@ void ManualStitchPage::onCheckBreakpoints() {
   emit checkStarted();
 
   auto* watcher = new QFutureWatcher<CheckTaskResult>(this);
-  connect(watcher, &QFutureWatcher<CheckTaskResult>::finished, this, [this, watcher]() {
+  connect(watcher, &QFutureWatcher<CheckTaskResult>::finished, this, [this, watcher, context]() {
     CheckTaskResult res = watcher->result();
     watcher->deleteLater();
     checkRunning_ = false;
@@ -517,6 +527,7 @@ void ManualStitchPage::onCheckBreakpoints() {
       return;
     }
     segments_ = std::move(res.segments);
+    materializedContextBp_ = context;
     refreshPreview();
     const bool ok = allBreakpointsMatch();
     appendResult(ok ? "[CHECK:OK] all breakpoints passed."
@@ -583,6 +594,7 @@ void ManualStitchPage::onCheckBreakpoints() {
 }
 
 void ManualStitchPage::onExport() {
+  contextSpin_->interpretText();
   if (segments_.empty()) {
     QMessageBox::information(this, "No segments", "Add at least one segment.");
     return;
@@ -836,6 +848,7 @@ void ManualStitchPage::refreshSeqCombo() {
 }
 
 void ManualStitchPage::refreshSegments() {
+  materializedContextBp_ = -1;
   segmentList_->clear();
   long long total = 0;
   for (int i = 0; i < static_cast<int>(segments_.size()); ++i) {
@@ -856,9 +869,15 @@ void ManualStitchPage::refreshSegments() {
 }
 
 void ManualStitchPage::refreshPreview() {
+  contextSpin_->interpretText();
   preview_->clear();
   if (segments_.size() < 2) {
     preview_->setPlainText("Add at least two segments to preview breakpoints.");
+    return;
+  }
+  const int context = contextSpin_->value();
+  if (materializedContextBp_ != context) {
+    preview_->setPlainText("Context changed. Click 'Check breakpoints' to refresh breakpoint context.");
     return;
   }
   bool hasContext = true;
@@ -879,7 +898,7 @@ void ManualStitchPage::refreshPreview() {
   for (int i = 0; i + 1 < static_cast<int>(segments_.size()); ++i) {
     const auto& left = segments_[i];
     const auto& right = segments_[i + 1];
-    html += renderBreakpointCardHtml(i, left, right, contextSpin_->value());
+    html += renderBreakpointCardHtml(i, left, right, context);
   }
   html += "</div>";
   preview_->setHtml(html);

@@ -54,6 +54,8 @@ AlignmentResult Minimap2Aligner::align(const AlignmentRequest& request) const {
   cReq.query_fasta = request.queryFasta.c_str();
   cReq.target_seq = request.targetSeq.c_str();
   cReq.query_seq = request.querySeq.c_str();
+  cReq.reverse_target = request.reverseTarget ? 1 : 0;
+  cReq.reverse_query = request.reverseQuery ? 1 : 0;
   cReq.preset = request.preset.c_str();
   cReq.threads = request.threads;
   cReq.output_paf = pafPath.c_str();

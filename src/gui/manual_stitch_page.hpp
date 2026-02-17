@@ -130,6 +130,7 @@ class ManualStitchPage : public QWidget {
   QMap<QString, QStringList> namesBySource_;
   mutable std::unordered_map<std::string, std::shared_ptr<gapneedle::FastaIndexedReader>> fastaIndexCache_;
   int nextExtraId_{1};
+  int materializedContextBp_{-1};
   bool checkRunning_{false};
   bool externalBusy_{false};
   QString externalBusyReason_;

@@ -162,6 +162,44 @@ static int gn_write_single_fasta(const char* path, const char* name, const char*
   return 0;
 }
 
+static char gn_comp_base(char c) {
+  switch ((unsigned char)toupper((unsigned char)c)) {
+    case 'A': return 'T';
+    case 'T': return 'A';
+    case 'C': return 'G';
+    case 'G': return 'C';
+    case 'U': return 'A';
+    case 'R': return 'Y';
+    case 'Y': return 'R';
+    case 'S': return 'S';
+    case 'W': return 'W';
+    case 'K': return 'M';
+    case 'M': return 'K';
+    case 'B': return 'V';
+    case 'D': return 'H';
+    case 'H': return 'D';
+    case 'V': return 'B';
+    default: return 'N';
+  }
+}
+
+static void gn_reverse_complement_inplace(gn_str_t* seq) {
+  if (!seq || !seq->s || seq->n == 0) return;
+  size_t i = 0;
+  size_t j = seq->n - 1;
+  while (i < j) {
+    const char li = seq->s[i];
+    const char rj = seq->s[j];
+    seq->s[i] = gn_comp_base(rj);
+    seq->s[j] = gn_comp_base(li);
+    ++i;
+    --j;
+  }
+  if (i == j) {
+    seq->s[i] = gn_comp_base(seq->s[i]);
+  }
+}
+
 static int gn_filter_paf_target(const char* in_path, const char* out_path, const char* target, int* n_written) {
   FILE* in = fopen(in_path, "rb");
   FILE* out = fopen(out_path, "wb");
@@ -212,7 +250,10 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
   int saved_stdout_fd = -1;
   gn_str_t q_name = {0, 0, 0};
   gn_str_t q_seq = {0, 0, 0};
+  gn_str_t t_name = {0, 0, 0};
+  gn_str_t t_seq = {0, 0, 0};
   gn_str_t tmp_query = {0, 0, 0};
+  gn_str_t tmp_target = {0, 0, 0};
   gn_str_t tmp_raw_paf = {0, 0, 0};
   int rc = -2;
 
@@ -231,9 +272,31 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
     rc = -8;
     goto cleanup;
   }
+  if (req->reverse_query) {
+    gn_reverse_complement_inplace(&q_seq);
+  }
+
+  const char* mapping_target_fasta = req->target_fasta;
+  const char* filter_target_name = req->target_seq;
+  if (req->reverse_target) {
+    if (!req->target_seq || req->target_seq[0] == '\0') {
+      gn_set_err(err_buf, err_buf_len, "reverse_target requires target_seq");
+      rc = -15;
+      goto cleanup;
+    }
+    rc = gn_load_fasta_seq(req->target_fasta, req->target_seq, &t_name, &t_seq);
+    if (rc != 0) {
+      gn_set_err(err_buf, err_buf_len, "failed to load selected target sequence from FASTA");
+      rc = -16;
+      goto cleanup;
+    }
+    gn_reverse_complement_inplace(&t_seq);
+  }
 
   if (gn_str_set(&tmp_query, req->output_paf, strlen(req->output_paf)) != 0 ||
       gn_str_append_char(&tmp_query, '.') != 0 ||
+      gn_str_set(&tmp_target, req->output_paf, strlen(req->output_paf)) != 0 ||
+      gn_str_append_char(&tmp_target, '.') != 0 ||
       gn_str_set(&tmp_raw_paf, req->output_paf, strlen(req->output_paf)) != 0 ||
       gn_str_append_char(&tmp_raw_paf, '.') != 0) {
     gn_set_err(err_buf, err_buf_len, "out of memory for temporary paths");
@@ -245,12 +308,18 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
     rc = -11;
     goto cleanup;
   }
+  if (gn_str_set(&tmp_target, req->output_paf, strlen(req->output_paf)) != 0) {
+    gn_set_err(err_buf, err_buf_len, "out of memory for temporary target path");
+    rc = -11;
+    goto cleanup;
+  }
   if (gn_str_set(&tmp_raw_paf, req->output_paf, strlen(req->output_paf)) != 0) {
     gn_set_err(err_buf, err_buf_len, "out of memory for temporary paf path");
     rc = -11;
     goto cleanup;
   }
   if (gn_str_reserve(&tmp_query, tmp_query.n + 16) != 0 ||
+      gn_str_reserve(&tmp_target, tmp_target.n + 17) != 0 ||
       gn_str_reserve(&tmp_raw_paf, tmp_raw_paf.n + 16) != 0) {
     gn_set_err(err_buf, err_buf_len, "out of memory for temporary suffix");
     rc = -11;
@@ -258,6 +327,8 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
   }
   strcat(tmp_query.s, ".query.tmp.fa");
   tmp_query.n = strlen(tmp_query.s);
+  strcat(tmp_target.s, ".target.tmp.fa");
+  tmp_target.n = strlen(tmp_target.s);
   strcat(tmp_raw_paf.s, ".raw.tmp.paf");
   tmp_raw_paf.n = strlen(tmp_raw_paf.s);
 
@@ -267,6 +338,17 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
     }
     rc = -12;
     goto cleanup;
+  }
+  if (req->reverse_target) {
+    if (gn_write_single_fasta(tmp_target.s, t_name.s, t_seq.s) != 0) {
+      if (err_buf && err_buf_len > 0) {
+        snprintf(err_buf, (size_t)err_buf_len, "failed to write temp target FASTA: %s", strerror(errno));
+      }
+      rc = -17;
+      goto cleanup;
+    }
+    mapping_target_fasta = tmp_target.s;
+    filter_target_name = t_name.s;
   }
 
   FILE* raw_out = fopen(tmp_raw_paf.s, "wb");
@@ -287,7 +369,7 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
   }
   fclose(raw_out);
 
-  rdr = mm_idx_reader_open(req->target_fasta, &idx_opt, 0);
+  rdr = mm_idx_reader_open(mapping_target_fasta, &idx_opt, 0);
   if (!rdr) {
     gn_set_err(err_buf, err_buf_len, "failed to open target fasta/index");
     rc = -5;
@@ -298,9 +380,9 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
   while ((mi = mm_idx_reader_read(rdr, n_threads)) != 0) {
     int target_id = -1;
     mm_mapopt_update(&map_opt, mi);
-    if (req->target_seq && req->target_seq[0] != '\0') {
+    if (filter_target_name && filter_target_name[0] != '\0') {
       mm_idx_index_name(mi);
-      target_id = mm_idx_name2id(mi, req->target_seq);
+      target_id = mm_idx_name2id(mi, filter_target_name);
       if (target_id < 0) {
         mm_idx_destroy(mi);
         mi = 0;
@@ -325,16 +407,16 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
   GN_CLOSE(saved_stdout_fd);
   saved_stdout_fd = -1;
 
-  if (gn_filter_paf_target(tmp_raw_paf.s, req->output_paf, req->target_seq, &n_written) != 0) {
+  if (gn_filter_paf_target(tmp_raw_paf.s, req->output_paf, filter_target_name, &n_written) != 0) {
     gn_set_err(err_buf, err_buf_len, "failed to finalize filtered PAF");
     rc = -14;
     goto cleanup;
   }
 
-  if (req->target_seq && req->target_seq[0] != '\0' && !target_found_any_part) {
+  if (filter_target_name && filter_target_name[0] != '\0' && !target_found_any_part) {
     if (err_buf && err_buf_len > 0) {
       snprintf(err_buf, (size_t)err_buf_len,
-               "target sequence '%s' not found in target FASTA/index", req->target_seq);
+               "target sequence '%s' not found in target FASTA/index", filter_target_name);
     }
     rc = -10;
   } else if (n_written == 0) {
@@ -342,7 +424,7 @@ int gn_mm2_align_to_paf(const gn_mm2_request* req, char* err_buf, int err_buf_le
       snprintf(err_buf, (size_t)err_buf_len,
                "no alignments produced for query '%s' against target '%s'",
                req->query_seq ? req->query_seq : "*",
-               req->target_seq ? req->target_seq : "*");
+               filter_target_name ? filter_target_name : "*");
     }
     rc = -9;
   } else {
@@ -363,9 +445,13 @@ cleanup:
   }
   gn_str_free(&q_name);
   gn_str_free(&q_seq);
+  gn_str_free(&t_name);
+  gn_str_free(&t_seq);
   if (tmp_query.s) remove(tmp_query.s);
+  if (tmp_target.s) remove(tmp_target.s);
   if (tmp_raw_paf.s) remove(tmp_raw_paf.s);
   gn_str_free(&tmp_query);
+  gn_str_free(&tmp_target);
   gn_str_free(&tmp_raw_paf);
   if (rc != 0 && (!err_buf || err_buf_len <= 0 || err_buf[0] == '\0')) {
     gn_set_err(err_buf, err_buf_len, "minimap2 bridge failed");
