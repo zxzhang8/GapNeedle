@@ -23,6 +23,7 @@ set(GAPNEEDLE_PUBLIC_HEADERS
   include/gapneedle/mapping_service.hpp
   include/gapneedle/stitch_service.hpp
   include/gapneedle/telomere_service.hpp
+  include/gapneedle/guided_stitch_service.hpp
 )
 
 set(GAPNEEDLE_CORE_SOURCES
@@ -31,6 +32,7 @@ set(GAPNEEDLE_CORE_SOURCES
   src/core/mapping_service.cpp
   src/core/stitch_service.cpp
   src/core/telomere_service.cpp
+  src/core/guided_stitch_service.cpp
   src/core/facade.cpp
 )
 
@@ -83,6 +85,7 @@ if(GAPNEEDLE_BUILD_GUI)
     src/gui/main_window.cpp
     src/gui/align_page.cpp
     src/gui/paf_viewer_page.cpp
+    src/gui/guided_stitch_page.cpp
     src/gui/manual_stitch_page.cpp
     src/gui/fasta_search_page.cpp
   )

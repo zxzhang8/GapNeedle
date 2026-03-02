@@ -39,4 +39,12 @@ std::vector<std::tuple<std::string, int, int>> GapNeedleFacade::scanGaps(const s
   return gaps;
 }
 
+GuidedSeedResult GapNeedleFacade::guidedSeed(const GuidedSeedRequest& request) const {
+  return guidedStitchService_.seedCandidates(request);
+}
+
+GuidedStepResult GapNeedleFacade::guidedNext(const GuidedStepRequest& request) const {
+  return guidedStitchService_.nextCandidates(request);
+}
+
 }  // namespace gapneedle

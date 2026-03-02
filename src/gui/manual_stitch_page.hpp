@@ -29,6 +29,7 @@ class ManualStitchPage : public QWidget {
   explicit ManualStitchPage(gapneedle::GapNeedleFacade* facade, QWidget* parent = nullptr);
   bool isCheckRunning() const { return checkRunning_; }
   void setExternalBusy(bool busy, const QString& reason = QString());
+  void appendSegmentsFromGuide(const std::vector<gapneedle::Segment>& segments, bool append = true);
 
  public slots:
   void setAlignmentContext(const QString& targetFasta,

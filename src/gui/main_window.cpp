@@ -2,6 +2,7 @@
 
 #include "align_page.hpp"
 #include "fasta_search_page.hpp"
+#include "guided_stitch_page.hpp"
 #include "manual_stitch_page.hpp"
 #include "paf_viewer_page.hpp"
 #include "ui_components.hpp"
@@ -66,6 +67,7 @@ void MainWindow::setupUi() {
   navList_->setFocusPolicy(Qt::NoFocus);
   navList_->addItem("Align");
   navList_->addItem("PAF Viewer");
+  navList_->addItem("Guided Stitch");
   navList_->addItem("Manual Stitch");
   navList_->addItem("FASTA Search");
   navList_->setCurrentRow(0);
@@ -74,11 +76,13 @@ void MainWindow::setupUi() {
   pages_ = new QStackedWidget(splitter);
   alignPage_ = new AlignPage(&facade_, pages_);
   pafViewerPage_ = new PafViewerPage(pages_);
+  guidedPage_ = new GuidedStitchPage(&facade_, pages_);
   manualPage_ = new ManualStitchPage(&facade_, pages_);
   searchPage_ = new FastaSearchPage(pages_);
 
   pages_->addWidget(alignPage_);
   pages_->addWidget(pafViewerPage_);
+  pages_->addWidget(guidedPage_);
   pages_->addWidget(manualPage_);
   pages_->addWidget(searchPage_);
 
@@ -120,6 +124,7 @@ void MainWindow::setupConnections() {
                  const QString& targetFasta,
                  const QString& queryFasta) {
             pafViewerPage_->setContext(pafPath, targetSeq, querySeq, true);
+            guidedPage_->setAlignmentContext(targetFasta, queryFasta, targetSeq, querySeq, pafPath);
             manualPage_->setAlignmentContext(targetFasta, queryFasta, targetSeq, querySeq, pafPath);
             manualPage_->setExternalBusy(false);
             setStatusIcon("success", QString("Alignment ready: %1").arg(pafPath));
@@ -150,6 +155,12 @@ void MainWindow::setupConnections() {
     setStatusIcon("error", errorMessage);
     statusBar()->showMessage(QString("Breakpoint check failed: %1").arg(errorMessage));
   });
+
+  connect(guidedPage_, &GuidedStitchPage::importRequested, this, [this](bool append) {
+    manualPage_->appendSegmentsFromGuide(guidedPage_->selectedSegments(), append);
+    navList_->setCurrentRow(3);
+    gapneedle::ui::showToast(this, "Guided segments imported to Manual Stitch", "success");
+  });
 }
 
 void MainWindow::onNavChanged(int row) {
@@ -168,10 +179,14 @@ void MainWindow::onNavChanged(int row) {
       headerSubTitle_->setText("Inspect records, map coordinates, and validate overlap candidates");
       break;
     case 2:
+      headerTitle_->setText("Guided Stitch");
+      headerSubTitle_->setText("Stepwise semi-automatic candidate chaining on target axis");
+      break;
+    case 3:
       headerTitle_->setText("Manual Stitch");
       headerSubTitle_->setText("Compose segments, verify breakpoints, and export merged FASTA");
       break;
-    case 3:
+    case 4:
       headerTitle_->setText("FASTA Search");
       headerSubTitle_->setText("Find query subsequences and inspect hit coordinates");
       break;

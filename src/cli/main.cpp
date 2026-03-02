@@ -50,11 +50,13 @@ std::vector<std::string> getMany(const std::unordered_map<std::string, std::vect
 }
 
 void printUsage() {
-  std::cout << "gapneedle_cli --cmd <align|stitch|scan-gaps|check-telomere> [options]\n"
+  std::cout << "gapneedle_cli --cmd <align|stitch|scan-gaps|check-telomere|guided-seed|guided-next> [options]\n"
             << "  align: --target-fasta --query-fasta --target-seq --query-seq [--output] [--preset] [--threads]\n"
             << "  stitch: --target-fasta --query-fasta --output --segment src:name:start:end[:rc] (repeatable)\n"
             << "  scan-gaps: --target-fasta [--min-gap]\n"
-            << "  check-telomere: --target-fasta --seq-name\n";
+            << "  check-telomere: --target-fasta --seq-name\n"
+            << "  guided-seed: --paf --target-seq --query-seq [--max-seeds] [--near-zero-window]\n"
+            << "  guided-next: --paf --target-seq --query-seq --last-axis-end [--max-next] [--max-jump-bp] [--min-progress-bp]\n";
 }
 
 }  // namespace
@@ -124,6 +126,55 @@ int main(int argc, char* argv[]) {
     } else if (cmd == "check-telomere") {
       auto [left, right] = gapneedle::checkTelomere(getOne(opts, "--target-fasta"), getOne(opts, "--seq-name"));
       std::cout << "left=" << (left ? "true" : "false") << " right=" << (right ? "true" : "false") << "\n";
+    } else if (cmd == "guided-seed") {
+      gapneedle::GuidedSeedRequest req;
+      req.pafPath = getOne(opts, "--paf");
+      req.targetSeq = getOne(opts, "--target-seq");
+      req.querySeq = getOne(opts, "--query-seq");
+      req.maxSeeds = std::stoi(getOne(opts, "--max-seeds", "12"));
+      req.constraints.nearZeroWindow = std::stoi(getOne(opts, "--near-zero-window", "1000"));
+
+      auto r = facade.guidedSeed(req);
+      for (const auto& w : r.warnings) {
+        std::cout << "warning\t" << w << "\n";
+      }
+      for (std::size_t i = 0; i < r.candidates.size(); ++i) {
+        const auto& c = r.candidates[i];
+        std::cout << i
+                  << "\t" << c.segment.source << ":" << c.segment.seqName << ":" << c.segment.start << ":" << c.segment.end
+                  << (c.segment.reverse ? ":rc" : "")
+                  << "\taxis=" << c.axisStart << "-" << c.axisEnd
+                  << "\tscore=" << c.score
+                  << "\tgroup=" << c.group
+                  << "\tsupport=" << c.supportCount
+                  << "\t" << c.rationale << "\n";
+      }
+    } else if (cmd == "guided-next") {
+      gapneedle::GuidedStepRequest req;
+      req.pafPath = getOne(opts, "--paf");
+      req.targetSeq = getOne(opts, "--target-seq");
+      req.querySeq = getOne(opts, "--query-seq");
+      req.lastAxisEnd = std::stoi(getOne(opts, "--last-axis-end", "0"));
+      req.maxNext = std::stoi(getOne(opts, "--max-next", "12"));
+      req.constraints.maxJumpBp = std::stoi(getOne(opts, "--max-jump-bp", "200000"));
+      req.constraints.minProgressBp = std::stoi(getOne(opts, "--min-progress-bp", "200"));
+
+      auto r = facade.guidedNext(req);
+      std::cout << "exhausted=" << (r.exhausted ? "true" : "false") << "\n";
+      for (const auto& w : r.warnings) {
+        std::cout << "warning\t" << w << "\n";
+      }
+      for (std::size_t i = 0; i < r.candidates.size(); ++i) {
+        const auto& c = r.candidates[i];
+        std::cout << i
+                  << "\t" << c.segment.source << ":" << c.segment.seqName << ":" << c.segment.start << ":" << c.segment.end
+                  << (c.segment.reverse ? ":rc" : "")
+                  << "\taxis=" << c.axisStart << "-" << c.axisEnd
+                  << "\tscore=" << c.score
+                  << "\tgroup=" << c.group
+                  << "\tsupport=" << c.supportCount
+                  << "\t" << c.rationale << "\n";
+      }
     } else {
       printUsage();
       return 2;

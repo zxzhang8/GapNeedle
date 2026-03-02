@@ -286,6 +286,25 @@ void ManualStitchPage::setAlignmentContext(const QString& targetFasta,
   appendResult(QString("Alignment context synced: target=%1 query=%2").arg(targetSeq, querySeq));
 }
 
+void ManualStitchPage::appendSegmentsFromGuide(const std::vector<gapneedle::Segment>& segments, bool append) {
+  if (!append) {
+    segments_.clear();
+  }
+  for (const auto& s : segments) {
+    SegmentItem item;
+    item.source = QString::fromStdString(s.source);
+    item.seqName = QString::fromStdString(s.seqName);
+    item.start = s.start;
+    item.end = s.end;
+    item.reverse = s.reverse;
+    segments_.push_back(std::move(item));
+  }
+  refreshSegments();
+  appendResult(QString("Guided import: %1 segment(s), mode=%2")
+                   .arg(segments.size())
+                   .arg(append ? "append" : "replace"));
+}
+
 void ManualStitchPage::onBrowseTarget() {
   const QString path = QFileDialog::getOpenFileName(this, "Select target FASTA", QString(),
                                                     "FASTA (*.fa *.fasta *.fna);;All files (*)");

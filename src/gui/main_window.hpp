@@ -6,6 +6,7 @@
 
 class AlignPage;
 class PafViewerPage;
+class GuidedStitchPage;
 class ManualStitchPage;
 class FastaSearchPage;
 class QLabel;
@@ -41,6 +42,7 @@ class MainWindow : public QMainWindow {
 
   AlignPage* alignPage_{nullptr};
   PafViewerPage* pafViewerPage_{nullptr};
+  GuidedStitchPage* guidedPage_{nullptr};
   ManualStitchPage* manualPage_{nullptr};
   FastaSearchPage* searchPage_{nullptr};
 };

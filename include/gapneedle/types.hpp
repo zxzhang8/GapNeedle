@@ -88,4 +88,55 @@ struct MappingResult {
   int tConsumedBefore{0};
 };
 
+struct GuidedConstraints {
+  int nearZeroWindow{1000};
+  int maxJumpBp{200000};
+  int minProgressBp{200};
+  int maxSteps{120};
+};
+
+struct GuidedCandidate {
+  Segment segment;
+  std::string recordId;
+  int axisStart{0};   // target-axis start
+  int axisEnd{0};     // target-axis end
+  int unclippedAxisEnd{0};
+  int clippedAt{-1};
+  int supportCount{0};
+  bool fallbackNearZero{false};
+  double score{0.0};
+  std::string group;      // strong / acceptable / risk
+  std::string rationale;  // short explanation for UI
+};
+
+struct GuidedSeedRequest {
+  std::string pafPath;
+  std::string targetSeq;
+  std::string querySeq;
+  int maxSeeds{12};
+  GuidedConstraints constraints{};
+};
+
+struct GuidedStepRequest {
+  std::string pafPath;
+  std::string targetSeq;
+  std::string querySeq;
+  int lastAxisEnd{0};
+  int lastChosenIndex{-1};
+  std::vector<Segment> chosenPath;
+  int maxNext{12};
+  GuidedConstraints constraints{};
+};
+
+struct GuidedSeedResult {
+  std::vector<GuidedCandidate> candidates;
+  std::vector<std::string> warnings;
+};
+
+struct GuidedStepResult {
+  std::vector<GuidedCandidate> candidates;
+  bool exhausted{false};
+  std::vector<std::string> warnings;
+};
+
 }  // namespace gapneedle
