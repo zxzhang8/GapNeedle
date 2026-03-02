@@ -1,0 +1,8 @@
+set(__QT_DEPLOY_TARGET_gapneedle_minimap2_bridge_FILE /mnt/d/projects/GapNeedle/build_cpp_gui_check/libgapneedle_minimap2_bridge.a)
+set(__QT_DEPLOY_TARGET_gapneedle_minimap2_bridge_TYPE STATIC_LIBRARY)
+set(__QT_DEPLOY_TARGET_gapneedle_core_FILE /mnt/d/projects/GapNeedle/build_cpp_gui_check/libgapneedle_core.a)
+set(__QT_DEPLOY_TARGET_gapneedle_core_TYPE STATIC_LIBRARY)
+set(__QT_DEPLOY_TARGET_gapneedle_cli_FILE /mnt/d/projects/GapNeedle/build_cpp_gui_check/gapneedle_cli)
+set(__QT_DEPLOY_TARGET_gapneedle_cli_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_gapneedle_gui_FILE /mnt/d/projects/GapNeedle/build_cpp_gui_check/gapneedle_gui)
+set(__QT_DEPLOY_TARGET_gapneedle_gui_TYPE EXECUTABLE)
