@@ -51,7 +51,7 @@ std::vector<std::string> getMany(const std::unordered_map<std::string, std::vect
 
 void printUsage() {
   std::cout << "gapneedle_cli --cmd <align|stitch|scan-gaps|check-telomere|guided-seed|guided-next> [options]\n"
-            << "  align: --target-fasta --query-fasta --target-seq --query-seq [--output] [--preset] [--threads]\n"
+            << "  align: --target-fasta --query-fasta --target-seq --query-seq [--output] [--preset] [--threads] [--index-cache-dir] [--no-index-cache]\n"
             << "  stitch: --target-fasta --query-fasta --output --segment src:name:start:end[:rc] (repeatable)\n"
             << "  scan-gaps: --target-fasta [--min-gap]\n"
             << "  check-telomere: --target-fasta --seq-name\n"
@@ -80,9 +80,14 @@ int main(int argc, char* argv[]) {
       req.outputPafPath = getOne(opts, "--output");
       req.preset = getOne(opts, "--preset", "asm10");
       req.threads = std::stoi(getOne(opts, "--threads", "4"));
+      req.useIndexCache = getOne(opts, "--no-index-cache") != "true";
+      req.indexCacheDir = getOne(opts, "--index-cache-dir", "resources/mm2_index");
       auto r = facade.align(req);
       std::cout << "PAF: " << r.pafPath << "\n";
       std::cout << "Skipped: " << (r.skipped ? "true" : "false") << "\n";
+      for (const auto& w : r.warnings) {
+        std::cout << w << "\n";
+      }
     } else if (cmd == "stitch") {
       StitchRequest req;
       req.targetFasta = getOne(opts, "--target-fasta");

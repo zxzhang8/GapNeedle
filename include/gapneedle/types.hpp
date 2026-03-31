@@ -17,6 +17,8 @@ struct AlignmentRequest {
   bool reverseTarget{false};
   bool reverseQuery{false};
   bool reuseExisting{true};
+  bool useIndexCache{true};
+  std::string indexCacheDir;
   std::string outputPafPath;
 };
 

@@ -6,6 +6,7 @@
 #include <QComboBox>
 #include <QCompleter>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -25,7 +26,9 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 
+#include <algorithm>
 #include <filesystem>
+#include <thread>
 
 namespace {
 
@@ -33,6 +36,11 @@ QString safePart(QString in) {
   static const QRegularExpression bad(R"([^A-Za-z0-9._-])");
   in.replace(bad, "_");
   return in;
+}
+
+QString cacheHash(const QString& text, int hexChars = 12) {
+  const QByteArray digest = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1).toHex();
+  return QString::fromLatin1(digest.left(hexChars));
 }
 
 QComboBox* createSearchableCombo(QWidget* parent) {
@@ -49,11 +57,23 @@ QComboBox* createSearchableCombo(QWidget* parent) {
 
 QString logLevelForKey(const QString& key) {
   if (key == "Config") return "config";
+  if (key == "Index") return "config";
   if (key == "Cache hit" || key == "Cache miss") return "cache";
   if (key == "PAF" || key == "Status") return "success";
   if (key == "Error") return "error";
   if (key == "Running" || key == "Load") return "running";
   return "info";
+}
+
+int defaultThreadCount() {
+  const unsigned int hw = std::thread::hardware_concurrency();
+  if (hw <= 2U) {
+    return 1;
+  }
+  if (hw <= 8U) {
+    return static_cast<int>(hw - 1U);
+  }
+  return static_cast<int>(std::min<unsigned int>(hw - 1U, 16U));
 }
 
 QTextCharFormat badgeFormatForLevel(const QString& level) {
@@ -164,7 +184,7 @@ AlignPage::AlignPage(gapneedle::GapNeedleFacade* facade, QWidget* parent)
   presetCombo_->setCurrentText("asm20");
   threads_ = new QSpinBox(optRow);
   threads_->setRange(1, 128);
-  threads_->setValue(4);
+  threads_->setValue(defaultThreadCount());
   reverseTarget_ = new QCheckBox("Reverse-complement target", optRow);
   reverseQuery_ = new QCheckBox("Reverse-complement query", optRow);
 
@@ -373,10 +393,12 @@ QString AlignPage::computeCachePafPath() const {
   const QString tPart = safePart(tfi.completeBaseName()) + "." + safePart(ts) + (reverseTarget_->isChecked() ? "_rc" : "");
   const QString qPart = safePart(qfi.completeBaseName()) + "." + safePart(qs) + (reverseQuery_->isChecked() ? "_rc" : "");
   const QString preset = safePart(presetCombo_->currentText().trimmed().isEmpty() ? "default" : presetCombo_->currentText().trimmed());
-  const QString dirname = qPart + "_vs_" + tPart;
+  const QString fullKey = qPart + "_vs_" + tPart + "." + preset;
+  const QString cacheStem = "aln_" + cacheHash(fullKey, 16);
+  const QString dirname = cacheStem;
 
   const QString base = QCoreApplication::applicationDirPath() + "/cache/alignments/" + dirname;
-  return base + "/" + dirname + "." + preset + ".paf";
+  return base + "/" + cacheStem + "." + preset + ".paf";
 }
 
 void AlignPage::onRunAlign() {
@@ -415,6 +437,8 @@ void AlignPage::onRunAlign() {
   req.reverseTarget = reverseTarget_->isChecked();
   req.reverseQuery = reverseQuery_->isChecked();
   req.reuseExisting = true;
+  req.useIndexCache = true;
+  req.indexCacheDir = (QCoreApplication::applicationDirPath() + "/cache/mm2_index").toStdString();
 
   alignRunning_ = true;
   runBtn_->setEnabled(false);
@@ -437,6 +461,9 @@ void AlignPage::onRunAlign() {
     }
     appendLog(QString("PAF: %1").arg(QString::fromStdString(task.result.pafPath)));
     appendLog(QString("Status: %1").arg(task.result.skipped ? "reused cache" : "newly generated"));
+    for (const auto& w : task.result.warnings) {
+      appendLog(QString::fromStdString(w));
+    }
     emit alignmentReady(QString::fromStdString(task.result.pafPath), ts, qs, tf, qf);
   });
 
@@ -463,6 +490,9 @@ void AlignPage::onRunAlign() {
                            .arg(req.threads)
                            .arg(req.reverseTarget ? "true" : "false")
                            .arg(req.reverseQuery ? "true" : "false");
+      out.configLine += QString(" | index_cache=%1 dir=%2")
+                            .arg(req.useIndexCache ? "true" : "false")
+                            .arg(QString::fromStdString(req.indexCacheDir));
       if (cacheHit) {
         out.cacheLine = QString("Cache hit: %1 (will reuse if aligner supports reuse)")
                             .arg(QString::fromStdString(req.outputPafPath));

@@ -2,8 +2,10 @@
 #include "gapneedle/guided_stitch_service.hpp"
 #include "gapneedle/mapping_service.hpp"
 #include "gapneedle/paf.hpp"
+#include "gapneedle/facade.hpp"
 
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -83,6 +85,70 @@ int main() {
     assert(hasT);
     assert(hasQ);
   }
+
+#if GAPNEEDLE_HAS_MINIMAP2
+  {
+    const std::string targetPath = "/tmp/gapneedle_mm2_target.fa";
+    const std::string queryPath = "/tmp/gapneedle_mm2_query.fa";
+    const std::string pafPath = "/tmp/gapneedle_mm2_cache/deep/result/gapneedle_mm2_result.paf";
+    const std::string indexDir = "/tmp/gapneedle_mm2_index_cache";
+    const std::string seq =
+        "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT"
+        "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT"
+        "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+
+    {
+      std::ofstream target(targetPath);
+      target << ">t1\n" << seq << '\n';
+    }
+    {
+      std::ofstream query(queryPath);
+      query << ">q1\n" << seq << '\n';
+    }
+
+    gapneedle::GapNeedleFacade facade;
+    gapneedle::AlignmentRequest req;
+    req.targetFasta = targetPath;
+    req.queryFasta = queryPath;
+    req.targetSeq = "t1";
+    req.querySeq = "q1";
+    req.outputPafPath = pafPath;
+    req.preset = "map-ont";
+    req.threads = 1;
+    req.useIndexCache = true;
+    req.indexCacheDir = indexDir;
+    req.reuseExisting = false;
+
+    std::filesystem::remove_all("/tmp/gapneedle_mm2_cache");
+
+    auto first = facade.align(req);
+    assert(!first.pafPath.empty());
+    assert(!first.skipped);
+    assert(!first.warnings.empty());
+    assert(std::filesystem::exists(pafPath));
+
+    auto recs = gapneedle::parsePaf(pafPath, "t1", "q1");
+    assert(!recs.empty());
+    bool hasCg = false;
+    for (const auto& extra : recs.front().extras) {
+      if (extra.rfind("cg:Z:", 0) == 0) {
+        hasCg = true;
+      }
+    }
+    assert(hasCg);
+
+    req.outputPafPath = "/tmp/gapneedle_mm2_result_second.paf";
+    auto second = facade.align(req);
+    assert(!second.warnings.empty());
+    bool sawCacheHit = false;
+    for (const auto& line : second.warnings) {
+      if (line.find("cache hit") != std::string::npos) {
+        sawCacheHit = true;
+      }
+    }
+    assert(sawCacheHit);
+  }
+#endif
 
   std::cout << "All tests passed\n";
   return 0;

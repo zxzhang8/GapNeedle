@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace gapneedle {
@@ -36,10 +37,28 @@ std::string defaultPafPath(const AlignmentRequest& req) {
   return (dir / (base + "." + safePart(req.preset) + ".paf")).string();
 }
 
+std::string defaultIndexCacheDir() {
+  return (std::filesystem::path("resources") / "mm2_index").string();
+}
+
+void ensureParentDirectoryExists(const std::string& outputPath) {
+  const std::filesystem::path pafPath(outputPath);
+  if (!pafPath.has_parent_path()) {
+    return;
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(pafPath.parent_path(), ec);
+  if (ec) {
+    throw std::runtime_error(std::string("failed to create output directory: ") + ec.message());
+  }
+}
+
 }  // namespace
 
 AlignmentResult Minimap2Aligner::align(const AlignmentRequest& request) const {
   const std::string pafPath = request.outputPafPath.empty() ? defaultPafPath(request) : request.outputPafPath;
+  ensureParentDirectoryExists(pafPath);
 
   if (request.reuseExisting && std::filesystem::exists(pafPath)) {
     std::error_code ec;
@@ -58,15 +77,28 @@ AlignmentResult Minimap2Aligner::align(const AlignmentRequest& request) const {
   cReq.reverse_query = request.reverseQuery ? 1 : 0;
   cReq.preset = request.preset.c_str();
   cReq.threads = request.threads;
+  cReq.allow_index_cache = request.useIndexCache ? 1 : 0;
+  const std::string indexCacheDir = request.indexCacheDir.empty() ? defaultIndexCacheDir() : request.indexCacheDir;
+  cReq.index_cache_dir = indexCacheDir.c_str();
   cReq.output_paf = pafPath.c_str();
 
   char errBuf[512] = {0};
-  const int rc = gn_mm2_align_to_paf(&cReq, errBuf, 512);
+  char traceBuf[4096] = {0};
+  const int rc = gn_mm2_align_to_paf(&cReq, errBuf, 512, traceBuf, 4096);
   if (rc != 0) {
     throw std::runtime_error(std::string("minimap2 alignment failed: ") + errBuf);
   }
 
-  return AlignmentResult{pafPath, false, {}};
+  AlignmentResult out{pafPath, false, {}};
+  if (traceBuf[0] != '\0') {
+    std::istringstream in(traceBuf);
+    for (std::string line; std::getline(in, line);) {
+      if (!line.empty()) {
+        out.warnings.push_back(line);
+      }
+    }
+  }
+  return out;
 }
 
 }  // namespace gapneedle
